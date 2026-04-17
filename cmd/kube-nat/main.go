@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 
+	"github.com/kube-nat/kube-nat/internal/agent"
+	"github.com/kube-nat/kube-nat/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -22,12 +24,11 @@ func agentCmd() *cobra.Command {
 		Use:   "agent",
 		Short: "Run the NAT agent (DaemonSet mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAgent()
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			return agent.Run(cfg)
 		},
 	}
-}
-
-func runAgent() error {
-	// wired up in Task 12
-	return nil
 }

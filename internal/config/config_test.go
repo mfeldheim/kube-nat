@@ -51,3 +51,17 @@ func TestInvalidMode(t *testing.T) {
 		t.Error("want error for invalid mode")
 	}
 }
+
+func TestDashboardDefaults(t *testing.T) {
+	t.Setenv("KUBE_NAT_MODE", "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ScrapeInterval != 5*time.Second {
+		t.Errorf("want 5s got %v", cfg.ScrapeInterval)
+	}
+	if cfg.DashboardPort != 8080 {
+		t.Errorf("want 8080 got %d", cfg.DashboardPort)
+	}
+}

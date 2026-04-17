@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.15
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.297.0
+	github.com/coreos/go-iptables v0.8.0
 	github.com/spf13/cobra v1.10.2
 )
 

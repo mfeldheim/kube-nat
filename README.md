@@ -4,8 +4,6 @@
 
 # kube-nat
 
-> **For agentic readers:** This document is structured for both human and automated consumption. Each section is self-contained. Key facts are front-loaded. Configuration reference is machine-parseable. Jump to any section directly.
-
 kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE DaemonSet running on Kubernetes spot instances. Pods on private subnets reach the internet through the kube-nat agent on their node's availability zone, which performs SNAT via the instance's existing Elastic IP — no NAT Gateway required.
 
 ---
@@ -30,7 +28,7 @@ A standard highly-available setup runs one NAT Gateway per AZ. On a three-AZ clu
 | 3 AZs, 10 TB outbound | $97.20 + $450 = **$547.20** | ~$15 | **$532** |
 | 3 AZs, 50 TB outbound | $97.20 + $2,250 = **$2,347.20** | ~$15 | **$2,332** |
 
-_kube-nat nodes are spot instances managed by Karpenter. Data processing through an EC2 instance is free — you only pay for the instance-hours. Prices as of 2025, us-east-1._
+_kube-nat nodes are spot instances. Data processing through an EC2 instance is free — you only pay for the instance-hours. Prices as of 2025, us-east-1._
 
 ### Other advantages over NAT Gateway
 
@@ -67,7 +65,7 @@ Each kube-nat agent:
 | Layer | Trigger | Latency |
 |---|---|---|
 | Spot notice watcher | EC2 metadata `/spot/termination-time` polled every 5s | ~100ms after notice |
-| SIGTERM handler | Karpenter drain / pod eviction | ~100ms |
+| SIGTERM handler | node drain / pod eviction | ~100ms |
 | TCP peer heartbeat | 2 missed beats × 200ms interval | ~400ms |
 
 ### Components
@@ -82,7 +80,7 @@ Each kube-nat agent:
 ## Prerequisites
 
 - Kubernetes 1.25+ on AWS EKS
-- Karpenter managing the NAT nodes (recommended) or any node provisioner
+- Any node provisioner or autoscaler (Karpenter, Cluster Autoscaler, managed node groups, etc.)
 - Each NAT node must have:
   - An Elastic IP associated with its primary network interface
   - `src/dst check` disabled on the ENI (required for MASQUERADE to work)
@@ -113,23 +111,10 @@ Each kube-nat agent:
 
 ### 1. Label the NAT nodes
 
-kube-nat agents only run on nodes labelled `node-role.kubernetes.io/nat=true`. Apply this label in your Karpenter `NodePool` or manually:
+kube-nat agents only run on nodes labelled `node-role.kubernetes.io/nat=true`. Apply this label however suits your setup — node group launch template userdata, a `MutatingWebhook`, or manually:
 
-```yaml
-# karpenter NodePool excerpt
-spec:
-  template:
-    metadata:
-      labels:
-        node-role.kubernetes.io/nat: "true"
-    spec:
-      requirements:
-        - key: karpenter.sh/capacity-type
-          operator: In
-          values: ["spot"]
-        - key: topology.kubernetes.io/zone
-          operator: In
-          values: ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
+```bash
+kubectl label node <node-name> node-role.kubernetes.io/nat=true
 ```
 
 ### 2. Install with Helm
@@ -556,7 +541,7 @@ go test ./... -v -race
 docker build -t kube-nat:dev .
 ```
 
-The multi-stage Dockerfile builds the React SPA (Node 20) then the Go binary (Go 1.22), producing a minimal `debian:bookworm-slim` image.
+The multi-stage Dockerfile builds the React SPA (node:20-alpine) then the Go binary (golang:1.25-alpine), producing a minimal `alpine:3.21` runtime image.
 
 ---
 

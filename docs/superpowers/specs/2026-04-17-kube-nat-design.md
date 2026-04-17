@@ -68,7 +68,9 @@ kube-nat/
 
 NAT at high throughput is CPU-bound — iptables POSTROUTING is single-threaded per flow. Avoid burstable instances (t-family): CPU throttling under sustained load causes unpredictable NAT latency.
 
-**Recommended:** `c8g.large` or `c8g.xlarge` (ARM64, Graviton4). Benchmark at expected peak egress before go-live — measure CPU steal and conntrack usage under load, not just throughput.
+**Baseline: `c8g.medium`** (ARM64, Graviton4, ~$0.034/hr, ~$25/mo each). At the current cluster egress of ~8.1 TB/month, 3× c8g.medium costs ~$74/mo vs ~$435/mo on NAT Gateway — saving ~$361/mo ($4,332/yr). Start here and scale up if CPU saturation appears under peak load.
+
+**Scale up to `c8g.large`** (~$0.068/hr) if sustained CPU > 60% on any NAT node. Benchmark at peak egress: measure CPU per-node and conntrack usage, not just aggregate throughput.
 
 ## Karpenter NodePool
 
@@ -102,7 +104,7 @@ spec:
           values: ["arm64"]
         - key: node.kubernetes.io/instance-type
           operator: In
-          values: ["c8g.large", "c8g.xlarge"]
+          values: ["c8g.medium", "c8g.large"]   # start medium, scale to large if CPU saturates
   disruption:
     consolidationPolicy: WhenEmpty        # never consolidate active NAT nodes
     expireAfter: Never

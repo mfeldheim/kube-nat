@@ -69,18 +69,20 @@ kube-nat/
 ## Route Table Management
 
 ### Route table discovery convention
-kube-nat discovers route tables by tag. Route tables must be tagged:
+kube-nat discovers route tables by tag. Each AZ's private subnet route table must be tagged:
 ```
 kube-nat/managed = "true"
-kube-nat/az      = "us-east-1a"   # matches topology.kubernetes.io/zone
+kube-nat/az      = "us-east-1a"   # matches topology.kubernetes.io/zone value
 ```
 Tag key prefix is configurable via `KUBE_NAT_TAG_PREFIX` (default: `kube-nat`).
+
+Each agent owns only its own AZ's route table. Traffic never crosses AZ boundaries.
 
 ### Auto mode (default)
 On startup, agent:
 1. Queries EC2 metadata to determine own AZ and instance ID
-2. Discovers all private subnet route tables tagged `kube-nat/az=<own-az>` via AWS API
-3. Upserts `0.0.0.0/0 → this instance` in each route table
+2. Discovers route tables tagged `kube-nat/az=<own-az>` via AWS API
+3. Upserts `0.0.0.0/0 → this instance` in each discovered route table
 
 ### Manual mode (`KUBE_NAT_MODE=manual`)
 Route table writes are skipped entirely. Instead, the agent logs human-readable instructions to stderr:

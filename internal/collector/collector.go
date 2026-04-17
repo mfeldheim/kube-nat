@@ -61,10 +61,10 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	}
 
 	var (
-		agents    []AgentSnap
+		agents    = make([]AgentSnap, 0)
 		totalTx   float64
 		totalRx   float64
-		failovers []FailoverEvent
+		failovers = make([]FailoverEvent, 0)
 	)
 
 	for _, pod := range pods.Items {

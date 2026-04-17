@@ -60,9 +60,70 @@ kube-nat/
 
 ## Topology
 
-- **Multi-AZ**: one kube-nat agent per AZ (minimum), running on nodes labeled `node-role.kubernetes.io/nat=true`
-- **Node placement**: explicit label — applied manually to dedicated NAT nodes or Karpenter node pools
+- **Multi-AZ**: **2 NAT nodes per AZ** (active + warm standby). One node per AZ is insufficient: `PodDisruptionBudget` with `maxUnavailable: 0` blocks Karpenter from draining anything in that AZ during the failover window. Two nodes allows zero-downtime maintenance — Karpenter can drain the standby while the active continues serving traffic.
+- **Node placement**: explicit label `node-role.kubernetes.io/nat=true` — applied via dedicated Karpenter NodePool
 - **AWS auth**: IRSA (IAM Roles for Service Accounts) — IAM role bound to ServiceAccount via annotation; AWS SDK auto-discovers credentials from pod environment
+
+## Instance Sizing
+
+NAT at high throughput is CPU-bound — iptables POSTROUTING is single-threaded per flow. Avoid burstable instances (t-family): CPU throttling under sustained load causes unpredictable NAT latency.
+
+**Recommended:** `c8g.large` or `c8g.xlarge` (ARM64, Graviton4). Benchmark at expected peak egress before go-live — measure CPU steal and conntrack usage under load, not just throughput.
+
+## Karpenter NodePool
+
+NAT nodes require a dedicated NodePool and EC2NodeClass separate from workload pools:
+
+```yaml
+# EC2NodeClass — public subnets only
+spec:
+  subnetSelectorTerms:
+    - tags:
+        kube-nat/public-subnet: "true"   # tag your public subnets
+  securityGroupSelectorTerms:
+    - tags:
+        kube-nat/nat-sg: "true"
+  amiFamily: AL2023
+
+# NodePool
+spec:
+  template:
+    metadata:
+      labels:
+        node-role.kubernetes.io/nat: "true"
+    spec:
+      nodeClassRef: kube-nat-nodeclass
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]           # NAT nodes must be on-demand
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["c8g.large", "c8g.xlarge"]
+  disruption:
+    consolidationPolicy: WhenEmpty        # never consolidate active NAT nodes
+    expireAfter: Never
+```
+
+**Critical:** NAT nodes must be **on-demand**. Spot interruptions on the NAT node cause a failover event. Use spot for workloads, on-demand for NAT.
+
+## Route Table Tag Migration
+
+Before deploying kube-nat, tag each per-AZ private route table in Terraform:
+
+```hcl
+resource "aws_route_table" "private" {
+  for_each = var.azs
+
+  tags = {
+    "kube-nat/managed" = "true"
+    "kube-nat/az"      = each.key   # e.g. "eu-west-1a"
+  }
+}
+```
 
 ---
 
@@ -178,8 +239,9 @@ kube_nat_packets_rx_total{az, instance_id, iface}
 ```
 kube_nat_conntrack_entries           # current tracked connections
 kube_nat_conntrack_max               # nf_conntrack_max kernel limit
-kube_nat_conntrack_usage_ratio       # entries/max — alert threshold: >0.8
+kube_nat_conntrack_usage_ratio       # entries/max — alert threshold: >0.7
 ```
+**Operational note:** conntrack exhaustion is the #1 silent failure mode on EC2 NAT. AWS Managed NAT Gateway has no practical conntrack limit; EC2 defaults to ~262k. Hitting the limit causes silent packet drops with no kernel error. Alert at 0.7, not 0.8, to leave headroom for traffic spikes. `KUBE_NAT_CONNTRACK_MAX` can raise the kernel limit; set it explicitly rather than relying on the default.
 
 ### NAT health
 ```
@@ -209,7 +271,7 @@ React SPA embedded in binary via `//go:embed web/dist`. Served by `kube-nat dash
 ### Features
 - Global header: cluster name, AZ count, node count, overall health status
 - Summary cards: total throughput (TX/RX), active connections (with conntrack % bar), failover count (24h)
-- Per-AZ cards: instance ID, instance type, TX/RX Mbps, active connections, owned route tables, spot interruption countdown when notice received
+- Per-AZ cards: instance ID, instance type, TX/RX Mbps, active connections, conntrack entries + usage % bar, owned route tables, spot interruption countdown when notice received
 - Bandwidth sparkline: all AZs combined, last 5 minutes, updated every 5s via WebSocket
 - Failover event log: timestamp, from-AZ, to-AZ, reason, duration
 

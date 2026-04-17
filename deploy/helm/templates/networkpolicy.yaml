@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-nat-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kube-nat.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: kube-nat
+      component: agent
+  ingress:
+  - ports:
+    - port: 9100
+      protocol: TCP
+  - from:
+    - podSelector:
+        matchLabels:
+          app: kube-nat
+          component: agent
+    ports:
+    - port: 9101
+      protocol: TCP
+  policyTypes:
+  - Ingress

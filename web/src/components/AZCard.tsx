@@ -1,0 +1,72 @@
+import type { AgentSnap } from '../types'
+
+interface Props {
+  agent: AgentSnap
+}
+
+function fmtBps(bps: number): string {
+  if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} MB/s`
+  if (bps >= 1e3) return `${(bps / 1e3).toFixed(1)} KB/s`
+  return `${bps.toFixed(0)} B/s`
+}
+
+export function AZCard({ agent: a }: Props) {
+  const statusDot = a.rule_present && a.src_dst_disabled ? 'bg-green-400' : 'bg-red-400'
+  const connPct = a.conntrack_max > 0 ? (a.conntrack_entries / a.conntrack_max) * 100 : 0
+  const connBarColor = connPct > 70 ? 'bg-red-500' : connPct > 50 ? 'bg-yellow-400' : 'bg-green-500'
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${statusDot}`} />
+          <span className="font-semibold">{a.az}</span>
+        </div>
+        {a.spot_pending && (
+          <span className="text-xs bg-orange-800 text-orange-200 px-2 py-0.5 rounded">
+            SPOT ⚠
+          </span>
+        )}
+      </div>
+
+      <div className="text-xs text-gray-400">{a.instance_id || '—'}</div>
+
+      <div className="flex gap-4 text-sm">
+        <div><span className="text-gray-400">TX </span><span>{fmtBps(a.tx_bps)}</span></div>
+        <div><span className="text-gray-400">RX </span><span>{fmtBps(a.rx_bps)}</span></div>
+      </div>
+
+      <div>
+        <div className="flex justify-between text-xs text-gray-400 mb-1">
+          <span>Conntrack</span>
+          <span>{a.conntrack_entries.toLocaleString()} / {a.conntrack_max.toLocaleString()}</span>
+        </div>
+        <div className="h-1.5 bg-gray-800 rounded">
+          <div
+            className={`h-full rounded ${connBarColor} transition-all duration-500`}
+            style={{ width: `${Math.min(connPct, 100).toFixed(1)}%` }}
+          />
+        </div>
+        <div className="text-xs text-gray-500 mt-0.5">{connPct.toFixed(1)}%</div>
+      </div>
+
+      {a.route_tables?.length > 0 && (
+        <div className="text-xs text-gray-400">Routes: {a.route_tables.join(', ')}</div>
+      )}
+
+      <div className="flex gap-2 text-xs">
+        <Flag ok={a.rule_present} label="iptables" />
+        <Flag ok={a.src_dst_disabled} label="src/dst" />
+        <Flag ok={a.peer_up} label="peer" />
+      </div>
+    </div>
+  )
+}
+
+function Flag({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span className={`px-1.5 py-0.5 rounded ${ok ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
+      {label}
+    </span>
+  )
+}

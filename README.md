@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="kubeNAT — Smart NAT Gateway for Kubernetes" width="480" />
+</p>
+
 # kube-nat
 
 > **For agentic readers:** This document is structured for both human and automated consumption. Each section is self-contained. Key facts are front-loaded. Configuration reference is machine-parseable. Jump to any section directly.

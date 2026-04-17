@@ -4,7 +4,7 @@
 
 # kube-nat
 
-kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE DaemonSet running on Kubernetes spot instances. Pods on private subnets reach the internet through the kube-nat agent on their node's availability zone, which performs SNAT via the instance's existing Elastic IP — no NAT Gateway required.
+kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE DaemonSet on EC2 worker nodes. Pods on private subnets reach the internet through the kube-nat agent in their availability zone, which performs SNAT via the instance's existing Elastic IP — no NAT Gateway required.
 
 ---
 
@@ -28,7 +28,7 @@ A standard highly-available setup runs one NAT Gateway per AZ. On a three-AZ clu
 | 3 AZs, 10 TB outbound | $97.20 + $450 = **$547.20** | ~$15 | **$532** |
 | 3 AZs, 50 TB outbound | $97.20 + $2,250 = **$2,347.20** | ~$15 | **$2,332** |
 
-_kube-nat nodes are spot instances. Data processing through an EC2 instance is free — you only pay for the instance-hours. Prices as of 2025, us-east-1._
+_kube-nat cost shown using spot t3.small instances — on-demand works too. Data processing through EC2 is free; you only pay for instance-hours. Prices as of 2025, us-east-1._
 
 ### Other advantages over NAT Gateway
 
@@ -46,7 +46,7 @@ _kube-nat nodes are spot instances. Data processing through an EC2 instance is f
 │                                                                  │
 │  ┌──────────┐    iptables MASQUERADE    ┌────────────────────┐  │
 │  │  pod     │ ─────────────────────────▶│  kube-nat agent    │─▶ internet
-│  │ 10.0.1.5 │                           │  (spot instance)   │  │
+│  │ 10.0.1.5 │                           │  (EC2 instance)    │  │
 │  └──────────┘                           │  EIP: 1.2.3.4      │  │
 │                                         └────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘

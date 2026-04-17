@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-nat-dashboard
+  namespace: kube-nat
+  labels:
+    app: kube-nat
+    component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-nat
+      component: dashboard
+  template:
+    metadata:
+      labels:
+        app: kube-nat
+        component: dashboard
+    spec:
+      serviceAccountName: kube-nat-dashboard
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: dashboard
+        image: ghcr.io/your-org/kube-nat:latest
+        args: ["dashboard"]
+        securityContext:
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        env:
+        - name: POD_NAMESPACE
+          value: kube-nat
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5

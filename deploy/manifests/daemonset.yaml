@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-nat-agent
+  namespace: kube-nat
+  labels:
+    app: kube-nat
+    component: agent
+spec:
+  selector:
+    matchLabels:
+      app: kube-nat
+      component: agent
+  template:
+    metadata:
+      labels:
+        app: kube-nat
+        component: agent
+    spec:
+      serviceAccountName: kube-nat-agent
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      terminationGracePeriodSeconds: 10
+      nodeSelector:
+        node-role.kubernetes.io/nat: "true"
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: agent
+        image: ghcr.io/your-org/kube-nat:latest
+        args: ["agent"]
+        securityContext:
+          privileged: false
+          capabilities:
+            add: ["NET_ADMIN", "NET_RAW"]
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - name: metrics
+          containerPort: 9100
+          protocol: TCP
+        - name: peer
+          containerPort: 9101
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9100
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9100
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sleep", "2"]
+        volumeMounts:
+        - name: proc-sys
+          mountPath: /proc/sys
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+      volumes:
+      - name: proc-sys
+        hostPath:
+          path: /proc/sys
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules

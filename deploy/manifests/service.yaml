@@ -1,0 +1,36 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-nat-agent
+  namespace: kube-nat
+  labels:
+    app: kube-nat
+    component: agent
+spec:
+  selector:
+    app: kube-nat
+    component: agent
+  clusterIP: None    # headless — collector addresses pods directly by IP
+  ports:
+  - name: metrics
+    port: 9100
+    targetPort: 9100
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-nat-dashboard
+  namespace: kube-nat
+  labels:
+    app: kube-nat
+    component: dashboard
+spec:
+  selector:
+    app: kube-nat
+    component: dashboard
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080

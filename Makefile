@@ -1,10 +1,13 @@
-.PHONY: build test lint test-nat
+.PHONY: build build-web test lint test-nat deploy
 
-build:
+build-web:
+	cd web && npm ci && npm run build
+
+build: build-web
 	go build -o bin/kube-nat ./cmd/kube-nat
 
 test:
-	go test ./... -v -race
+	go test ./... -race
 
 lint:
 	go vet ./...
@@ -12,3 +15,6 @@ lint:
 test-nat:
 	docker build -t kube-nat-test --target test .
 	docker run --rm --cap-add NET_ADMIN kube-nat-test
+
+deploy:
+	helm upgrade --install kube-nat deploy/helm/ --create-namespace

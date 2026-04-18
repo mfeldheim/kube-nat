@@ -17,5 +17,5 @@ func SetPortRange(portRange string) error {
 	if portRange == "" {
 		return nil
 	}
-	return writeSysctl("/proc/sys/net/ipv4/ip_local_port_range", portRange)
+	return writeSysctl("/host/proc/sys/net/ipv4/ip_local_port_range", portRange)
 }

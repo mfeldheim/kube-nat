@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-const defaultConntrackCountPath = "/proc/sys/net/netfilter/nf_conntrack_count"
-const defaultConntrackMaxPath = "/proc/sys/net/netfilter/nf_conntrack_max"
+const defaultConntrackCountPath = "/host/proc/sys/net/netfilter/nf_conntrack_count"
+const defaultConntrackMaxPath = "/host/proc/sys/net/netfilter/nf_conntrack_max"
 
 // ReadConntrackCount reads the current number of tracked connections from path.
 func ReadConntrackCount(path string) (int, error) {

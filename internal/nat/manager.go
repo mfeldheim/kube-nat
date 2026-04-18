@@ -48,12 +48,12 @@ func (m *iptablesManager) MasqueradeExists(iface string) (bool, error) {
 }
 
 func (m *iptablesManager) EnableIPForward() error {
-	return writeSysctl("/proc/sys/net/ipv4/ip_forward", "1")
+	return writeSysctl("/host/proc/sys/net/ipv4/ip_forward", "1")
 }
 
 func (m *iptablesManager) SetConntrackMax(max int) error {
 	if max <= 0 {
 		return nil
 	}
-	return writeSysctl("/proc/sys/net/netfilter/nf_conntrack_max", fmt.Sprintf("%d", max))
+	return writeSysctl("/host/proc/sys/net/netfilter/nf_conntrack_max", fmt.Sprintf("%d", max))
 }

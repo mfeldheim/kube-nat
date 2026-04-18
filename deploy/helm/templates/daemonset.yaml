@@ -2,8 +2,9 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: kube-nat-agent
-  namespace: kube-nat
+  namespace: {{ .Values.namespace }}
   labels:
+    {{- include "kube-nat.labels" . | nindent 4 }}
     app: kube-nat
     component: agent
 spec:
@@ -16,19 +17,21 @@ spec:
       labels:
         app: kube-nat
         component: agent
+        {{- include "kube-nat.labels" . | nindent 8 }}
     spec:
       serviceAccountName: kube-nat-agent
       hostNetwork: true
       priorityClassName: system-node-critical
       terminationGracePeriodSeconds: 10
       nodeSelector:
-        node-role.kubernetes.io/nat: "true"
+        {{- toYaml .Values.agent.nodeSelector | nindent 8 }}
       tolerations:
       - operator: Exists
         effect: NoSchedule
       containers:
       - name: agent
-        image: ghcr.io/your-org/kube-nat:latest
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
         args: ["agent"]
         securityContext:
           privileged: false
@@ -36,21 +39,22 @@ spec:
             add: ["NET_ADMIN", "NET_RAW"]
           readOnlyRootFilesystem: true
         resources:
-          requests:
-            cpu: 50m
-            memory: 64Mi
-          limits:
-            cpu: 200m
-            memory: 128Mi
+          {{- toYaml .Values.agent.resources | nindent 10 }}
         env:
         - name: POD_NAME
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
         - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
+          value: {{ .Values.namespace | quote }}
+        - name: KUBE_NAT_MODE
+          value: {{ .Values.agent.mode | quote }}
+        - name: KUBE_NAT_TAG_PREFIX
+          value: {{ .Values.agent.tagPrefix | quote }}
+        {{- if .Values.agent.conntrackMax }}
+        - name: KUBE_NAT_CONNTRACK_MAX
+          value: {{ .Values.agent.conntrackMax | quote }}
+        {{- end }}
         ports:
         - name: metrics
           containerPort: 9100

@@ -39,18 +39,22 @@ func Run(cfg *config.Config) error {
 	logger.Printf("instance=%s az=%s eni=%s iface=%s", meta.InstanceID, meta.AZ, meta.ENIID, meta.PublicIface)
 
 	// 2. AWS EC2 client (IRSA credentials injected via pod env)
+	logger.Printf("initializing AWS EC2 client region=%s tag-prefix=%s", meta.Region, cfg.TagPrefix)
 	ec2Client, err := kubenataws.NewEC2Client(ctx, meta.Region, cfg.TagPrefix)
 	if err != nil {
 		return fmt.Errorf("aws ec2 client: %w", err)
 	}
+	logger.Printf("AWS EC2 client ready")
 
 	// 3. Disable src/dst check on primary ENI
+	logger.Printf("disabling src/dst check on ENI %s", meta.ENIID)
 	if err := ec2Client.DisableSourceDestCheck(ctx, meta.ENIID); err != nil {
 		return fmt.Errorf("disable src/dst check: %w", err)
 	}
 	logger.Printf("src/dst check disabled on %s", meta.ENIID)
 
 	// 4. NAT manager
+	logger.Printf("initializing NAT manager conntrack-max=%d port-range=%q", cfg.ConntrackMax, cfg.IPLocalPortRange)
 	natMgr, err := nat.NewManager()
 	if err != nil {
 		return fmt.Errorf("nat manager: %w", err)
@@ -61,12 +65,22 @@ func Run(cfg *config.Config) error {
 	if err := nat.SetPortRange(cfg.IPLocalPortRange); err != nil {
 		return fmt.Errorf("port range: %w", err)
 	}
+	logger.Printf("NAT manager ready")
 
 	// 5. Metrics
+	logger.Printf("initializing metrics registry")
 	reg := metrics.NewRegistry()
 	reg.SrcDstCheckDisabled.Set(1)
+	// Initialize byte/packet counters with instance labels so they appear in
+	// /metrics from startup — the dashboard reads the az/instance_id labels
+	// from these series to identify each agent, even before traffic flows.
+	reg.BytesTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface)
+	reg.BytesRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface)
+	reg.PacketsTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface)
+	reg.PacketsRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface)
 
 	// 6. Kubernetes client (in-cluster)
+	logger.Printf("initializing Kubernetes in-cluster client")
 	k8sCfg, err := rest.InClusterConfig()
 	if err != nil {
 		return fmt.Errorf("k8s in-cluster config: %w", err)
@@ -75,11 +89,14 @@ func Run(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("k8s client: %w", err)
 	}
+	logger.Printf("Kubernetes client ready")
 
 	// 7. Lease manager
+	logger.Printf("initializing lease manager namespace=%s duration=%s", cfg.Namespace, cfg.LeaseDuration)
 	leaseMgr := lease.NewManager(k8sClient, cfg.Namespace, cfg.LeaseDuration)
 
 	// 8. Reconciler
+	logger.Printf("initializing reconciler mode=%s iface=%s az=%s instance=%s", cfg.Mode, meta.PublicIface, meta.AZ, meta.InstanceID)
 	rec := reconciler.New(reconciler.Config{
 		NATManager: natMgr,
 		EC2Client:  ec2Client,
@@ -91,16 +108,20 @@ func Run(cfg *config.Config) error {
 	})
 
 	// 9. Initial reconcile — sets up iptables and claims route table
+	logger.Printf("running initial reconcile")
 	if err := rec.Reconcile(ctx); err != nil {
 		return fmt.Errorf("initial reconcile: %w", err)
 	}
+	logger.Printf("initial reconcile complete")
 	reg.RouteTableOwned.WithLabelValues("own").Set(1)
 
 	// 10. Write own Lease
 	podName := podNameOrInstanceID(meta.InstanceID)
+	logger.Printf("writing initial lease az=%s pod=%s", meta.AZ, podName)
 	if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
 		return fmt.Errorf("initial lease renew: %w", err)
 	}
+	logger.Printf("lease written")
 
 	// 11. Peer server
 	peerAddr := fmt.Sprintf(":%d", cfg.PeerPort)
@@ -160,6 +181,7 @@ func Run(cfg *config.Config) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				logger.Printf("reconcile tick")
 				if err := rec.Reconcile(ctx); err != nil {
 					logger.Printf("reconcile error: %v", err)
 				}

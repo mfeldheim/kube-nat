@@ -10,8 +10,7 @@ agent:
   mode: auto               # "auto" or "manual"
   conntrackMax: ""         # override nf_conntrack_max (empty = kernel default)
   tagPrefix: kube-nat
-  nodeSelector:
-    node-role.kubernetes.io/nat: "true"
+  nodeSelector: {}  # override in your values file; no default to avoid merge conflicts
   resources:
     requests:
       cpu: 50m

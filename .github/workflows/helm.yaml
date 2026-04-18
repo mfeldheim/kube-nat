@@ -1,0 +1,43 @@
+name: Publish Helm Chart (OCI)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - deploy/helm/**
+      - .github/workflows/helm.yaml
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Resolve chart version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # Strip leading 'v' — Helm versions must be semver without it
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package chart
+        run: |
+          helm package deploy/helm \
+            --version "${{ steps.version.outputs.version }}" \
+            --app-version "${GITHUB_REF_NAME}"
+
+      - name: Push to ghcr.io
+        run: helm push kube-nat-${{ steps.version.outputs.version }}.tgz oci://ghcr.io/mfeldheim

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kube-nat
+description: Kubernetes-native AWS NAT replacement
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

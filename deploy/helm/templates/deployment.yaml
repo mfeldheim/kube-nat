@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-nat-dashboard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kube-nat.labels" . | nindent 4 }}
+    app: kube-nat
+    component: dashboard
+spec:
+  replicas: {{ .Values.dashboard.replicas }}
+  selector:
+    matchLabels:
+      app: kube-nat
+      component: dashboard
+  template:
+    metadata:
+      labels:
+        app: kube-nat
+        component: dashboard
+        {{- include "kube-nat.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: kube-nat-dashboard
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: dashboard
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: ["dashboard"]
+        securityContext:
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.dashboard.resources | nindent 10 }}
+        env:
+        - name: POD_NAMESPACE
+          value: {{ .Values.namespace | quote }}
+        - name: KUBE_NAT_SCRAPE_INTERVAL
+          value: {{ .Values.dashboard.scrapeInterval | quote }}
+        - name: KUBE_NAT_DASHBOARD_PORT
+          value: {{ .Values.dashboard.port | quote }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.dashboard.port }}
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ .Values.dashboard.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 5

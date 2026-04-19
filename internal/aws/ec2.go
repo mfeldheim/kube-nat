@@ -218,9 +218,9 @@ func parseNetworkPerformanceBps(s string) (float64, error) {
 		return 0, fmt.Errorf("cannot parse network performance %q: %w", s, err)
 	}
 	switch strings.ToLower(parts[1]) {
-	case "gbps":
+	case "gbps", "gigabit":
 		return val * 1e9, nil
-	case "mbps":
+	case "mbps", "megabit":
 		return val * 1e6, nil
 	default:
 		return 0, fmt.Errorf("unknown unit in network performance %q", s)

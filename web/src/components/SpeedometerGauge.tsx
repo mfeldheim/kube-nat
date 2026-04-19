@@ -2,7 +2,8 @@ interface Props {
   value: number
   max: number
   color: string  // e.g. "#34d399" or "#60a5fa"
-  label: string  // "TX" or "RX"
+  label: string  // "TX", "RX", "conn"
+  formatValue?: (v: number) => string
 }
 
 function fmtBps(bps: number): string {
@@ -15,7 +16,7 @@ function fmtBps(bps: number): string {
 // Half-arc (semicircle) SVG speedometer gauge.
 // Arc: M8,38 A28,28 0 0,1 64,38 — centre (36,38), radius 28, sweeps upward left→right.
 // Arc length = π * 28 ≈ 87.96
-export function SpeedometerGauge({ value, max, color, label }: Props) {
+export function SpeedometerGauge({ value, max, color, label, formatValue = fmtBps }: Props) {
   const pct = max > 0 ? Math.min(value / max, 1) : 0
   const arcLen = Math.PI * 28
   const filled = pct * arcLen
@@ -54,7 +55,7 @@ export function SpeedometerGauge({ value, max, color, label }: Props) {
         </text>
       </svg>
       <div className="text-xs text-gray-400 -mt-1">{label}</div>
-      <div className="text-xs text-gray-100 font-bold">{fmtBps(value)}</div>
+      <div className="text-xs text-gray-100 font-bold">{formatValue(value)}</div>
     </div>
   )
 }

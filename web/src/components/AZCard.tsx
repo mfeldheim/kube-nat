@@ -10,8 +10,8 @@ type BtnState = 'idle' | 'loading' | 'ok' | 'error'
 
 export function AZCard({ agent: a }: Props) {
   const statusDot = a.rule_present && a.src_dst_disabled ? 'bg-green-400' : 'bg-red-400'
-  const connPct = a.conntrack_max > 0 ? (a.conntrack_entries / a.conntrack_max) * 100 : 0
-  const connBarColor = connPct > 70 ? 'bg-red-500' : connPct > 50 ? 'bg-yellow-400' : 'bg-green-500'
+  const connRatio = a.conntrack_max > 0 ? a.conntrack_entries / a.conntrack_max : 0
+  const connColor = connRatio > 0.7 ? '#ef4444' : connRatio > 0.5 ? '#f59e0b' : '#f59e0b'
   const [claimState, setClaimState] = useState<BtnState>('idle')
   const [releaseState, setReleaseState] = useState<BtnState>('idle')
   const [optimisticReleased, setOptimisticReleased] = useState(false)
@@ -22,6 +22,12 @@ export function AZCard({ agent: a }: Props) {
   }, [a.route_tables])
 
   const hasRoutes = !optimisticReleased && (a.route_tables?.length ?? 0) > 0
+
+  function fmtCount(v: number): string {
+    if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`
+    if (v >= 1e3) return `${(v / 1e3).toFixed(0)}k`
+    return String(Math.round(v))
+  }
 
   async function handleClaim() {
     setClaimState('loading')
@@ -69,20 +75,7 @@ export function AZCard({ agent: a }: Props) {
       <div className="flex gap-3 justify-center">
         <SpeedometerGauge value={a.tx_bps} max={a.max_bw_bps ?? 0} color="#34d399" label="TX" />
         <SpeedometerGauge value={a.rx_bps} max={a.max_bw_bps ?? 0} color="#60a5fa" label="RX" />
-      </div>
-
-      <div>
-        <div className="flex justify-between text-xs text-gray-400 mb-1">
-          <span>Conntrack</span>
-          <span>{a.conntrack_entries.toLocaleString()} / {a.conntrack_max.toLocaleString()}</span>
-        </div>
-        <div className="h-1.5 bg-gray-800 rounded">
-          <div
-            className={`h-full rounded ${connBarColor} transition-all duration-500`}
-            style={{ width: `${Math.min(connPct, 100).toFixed(1)}%` }}
-          />
-        </div>
-        <div className="text-xs text-gray-500 mt-0.5">{connPct.toFixed(1)}%</div>
+        <SpeedometerGauge value={a.conntrack_entries} max={a.conntrack_max} color={connColor} label="conn" formatValue={fmtCount} />
       </div>
 
       {hasRoutes && (

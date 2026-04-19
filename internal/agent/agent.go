@@ -220,12 +220,18 @@ func Run(cfg *config.Config) error {
 // pods that haven't been seen before. This ensures agents that start after us
 // are still discovered and monitored. connectedAZs tracks which AZs already
 // have an active client so we don't create duplicates.
+//
+// When a peer client declares failure (OnFailure), the AZ is removed from
+// connectedAZs so the next discovery tick creates a fresh client — this
+// handles peers that temporarily go down during rolling updates.
 func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kubernetes.Interface,
 	leaseMgr *lease.Manager, ec2Client kubenataws.EC2Client,
 	meta *kubenataws.InstanceMetadata, reg *metrics.Registry, logger *log.Logger,
 	mu *sync.Mutex, clients *[]*peer.Client) {
 
+	var azMu sync.Mutex
 	connectedAZs := make(map[string]bool)
+
 	discover := func() {
 		podList, err := k8sClient.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "app=kube-nat,component=agent",
@@ -236,16 +242,25 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 		}
 		for _, pod := range podList.Items {
 			podAZ := pod.Labels[cfg.AZLabel]
-			if podAZ == meta.AZ || pod.Status.PodIP == "" || connectedAZs[podAZ] {
+			if podAZ == meta.AZ || pod.Status.PodIP == "" {
 				continue
 			}
+			azMu.Lock()
+			already := connectedAZs[podAZ]
+			if !already {
+				connectedAZs[podAZ] = true
+			}
+			azMu.Unlock()
+			if already {
+				continue
+			}
+
 			peerAddr := fmt.Sprintf("%s:%d", pod.Status.PodIP, cfg.PeerPort)
 			peerAZ := podAZ
 			peerInstanceID := pod.Spec.NodeName
 
 			logger.Printf("discovered peer az=%s instance=%s addr=%s", peerAZ, peerInstanceID, peerAddr)
 			reg.PeerStatus.WithLabelValues(peerAZ, peerInstanceID).Set(1)
-			connectedAZs[peerAZ] = true
 
 			c := peer.NewClient(peerAZ, peer.ClientConfig{
 				ProbeInterval: cfg.ProbeInterval,
@@ -253,10 +268,18 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 				OnFailure: func(az string) {
 					reg.PeerStatus.WithLabelValues(az, peerInstanceID).Set(0)
 					logger.Printf("peer %s declared dead — attempting takeover", az)
+					// Remove from connectedAZs so the next discovery tick can reconnect
+					// if the peer restarts (e.g. rolling update).
+					azMu.Lock()
+					delete(connectedAZs, az)
+					azMu.Unlock()
 					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
 				},
 				OnStepDown: func(az string) {
 					logger.Printf("peer %s stepping down — taking over", az)
+					azMu.Lock()
+					delete(connectedAZs, az)
+					azMu.Unlock()
 					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
 				},
 			})

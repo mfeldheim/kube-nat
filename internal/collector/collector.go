@@ -24,13 +24,6 @@ type Config struct {
 	ScrapeInterval time.Duration
 }
 
-// prevCounters holds the last seen counter values for rate calculation.
-type prevCounters struct {
-	bytesTX float64
-	bytesRX float64
-	ts      time.Time
-}
-
 // agentState tracks the last known health state per AZ for event detection.
 type agentState struct {
 	peerUp      bool
@@ -43,8 +36,7 @@ type Collector struct {
 	client *http.Client
 	mu     sync.Mutex
 
-	prev    map[string]prevCounters // keyed by pod IP
-	history []HistoryPoint          // ring buffer, max 60 entries
+	history []HistoryPoint // ring buffer, max 60 entries
 
 	// persistent event log across scrape cycles
 	events    []EventEntry
@@ -61,7 +53,6 @@ func New(cfg Config) *Collector {
 	return &Collector{
 		cfg:            cfg,
 		client:         &http.Client{Timeout: 3 * time.Second},
-		prev:           make(map[string]prevCounters),
 		seenAZs:        make(map[string]bool),
 		agentStates:    make(map[string]agentState),
 		lastFailoverTS: make(map[string]float64),
@@ -125,7 +116,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 			continue // skip unreachable agents
 		}
 
-		snap := c.buildSnap(pod.Status.PodIP, families)
+		snap := c.buildSnap(families)
 		if snap == nil {
 			continue
 		}
@@ -249,7 +240,7 @@ func (c *Collector) scrape(ctx context.Context, url string) (map[string]*dto.Met
 
 // buildSnap extracts an AgentSnap from parsed metric families.
 // Returns nil if the AZ label is missing (not a kube-nat agent metric set).
-func (c *Collector) buildSnap(podIP string, families map[string]*dto.MetricFamily) *AgentSnap {
+func (c *Collector) buildSnap(families map[string]*dto.MetricFamily) *AgentSnap {
 	snap := &AgentSnap{}
 
 	snap.ConntrackEntries = gaugeVal(families, "kube_nat_conntrack_entries")
@@ -273,11 +264,9 @@ func (c *Collector) buildSnap(podIP string, families map[string]*dto.MetricFamil
 		}
 	}
 
-	// Read AZ + instance_id from bytes_tx labels; accumulate counter value.
-	var currentTx, currentRx float64
+	// Read AZ + instance_id from bytes_tx labels (counter is always present, even if 0).
 	if mf, ok := families["kube_nat_bytes_tx_total"]; ok && len(mf.Metric) > 0 {
-		m := mf.Metric[0]
-		for _, lp := range m.Label {
+		for _, lp := range mf.Metric[0].Label {
 			switch lp.GetName() {
 			case "az":
 				snap.AZ = lp.GetValue()
@@ -285,27 +274,11 @@ func (c *Collector) buildSnap(podIP string, families map[string]*dto.MetricFamil
 				snap.InstanceID = lp.GetValue()
 			}
 		}
-		if m.Counter != nil {
-			currentTx = m.Counter.GetValue()
-		}
-	}
-	if mf, ok := families["kube_nat_bytes_rx_total"]; ok && len(mf.Metric) > 0 {
-		if mf.Metric[0].Counter != nil {
-			currentRx = mf.Metric[0].Counter.GetValue()
-		}
 	}
 
-	// Compute per-second rates using counter delta / elapsed seconds.
-	c.mu.Lock()
-	p, hasPrev := c.prev[podIP]
-	now := time.Now()
-	if hasPrev && now.Sub(p.ts) > 0 {
-		elapsed := now.Sub(p.ts).Seconds()
-		snap.TxBytesPerSec = (currentTx - p.bytesTX) / elapsed
-		snap.RxBytesPerSec = (currentRx - p.bytesRX) / elapsed
-	}
-	c.prev[podIP] = prevCounters{bytesTX: currentTx, bytesRX: currentRx, ts: now}
-	c.mu.Unlock()
+	// Read EMA-smoothed rates computed by the agent's 1s bandwidth sampler.
+	snap.TxBytesPerSec = gaugeVal(families, "kube_nat_tx_bps")
+	snap.RxBytesPerSec = gaugeVal(families, "kube_nat_rx_bps")
 
 	// Last failover timestamp.
 	if mf, ok := families["kube_nat_last_failover_seconds"]; ok {

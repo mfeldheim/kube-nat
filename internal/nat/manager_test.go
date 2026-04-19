@@ -34,6 +34,9 @@ func (f *fakeNAT) SetConntrackMax(max int) error {
 	return nil
 }
 
+func (f *fakeNAT) EnsureForwardCounters() error            { return nil }
+func (f *fakeNAT) GetForwardBytes() (uint64, uint64, error) { return 0, 0, nil }
+
 func TestNATManagerInterface(t *testing.T) {
 	var _ nat.Manager = &fakeNAT{}
 }

@@ -26,6 +26,10 @@ type Registry struct {
 	SpotInterruptionPending prometheus.Gauge
 	MaxBandwidthBps         prometheus.Gauge
 
+	// Smoothed bandwidth rates updated every second by the agent.
+	TxBytesPerSec *prometheus.GaugeVec
+	RxBytesPerSec *prometheus.GaugeVec
+
 	reg *prometheus.Registry
 }
 
@@ -81,6 +85,14 @@ func NewRegistry() *Registry {
 		Name: "kube_nat_max_bandwidth_bps",
 		Help: "Peak network bandwidth of this instance in bytes/s (from EC2 DescribeInstanceTypes)",
 	})
+	m.TxBytesPerSec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kube_nat_tx_bps",
+		Help: "EMA-smoothed TX throughput in bytes/s, updated every second",
+	}, []string{"az", "instance_id"})
+	m.RxBytesPerSec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kube_nat_rx_bps",
+		Help: "EMA-smoothed RX throughput in bytes/s, updated every second",
+	}, []string{"az", "instance_id"})
 
 	r.MustRegister(
 		m.BytesTX, m.BytesRX, m.PacketsTX, m.PacketsRX,
@@ -88,6 +100,7 @@ func NewRegistry() *Registry {
 		m.RulePresent, m.SrcDstCheckDisabled, m.RouteTableOwned,
 		m.PeerStatus, m.FailoverTotal, m.LastFailover,
 		m.SpotInterruptionPending, m.MaxBandwidthBps,
+		m.TxBytesPerSec, m.RxBytesPerSec,
 	)
 	return m
 }

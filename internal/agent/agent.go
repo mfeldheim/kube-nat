@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -65,6 +66,9 @@ func Run(cfg *config.Config) error {
 	}
 	if err := nat.SetPortRange(cfg.IPLocalPortRange); err != nil {
 		return fmt.Errorf("port range: %w", err)
+	}
+	if err := natMgr.EnsureForwardCounters(); err != nil {
+		logger.Printf("WARNING: could not set up bandwidth accounting rules: %v", err)
 	}
 	logger.Printf("NAT manager ready")
 
@@ -193,7 +197,6 @@ func Run(cfg *config.Config) error {
 
 	// 16. Reconciliation loop
 	go func() {
-		var prevStats *iface.Stats
 		ticker := time.NewTicker(cfg.ReconcileInterval)
 		defer ticker.Stop()
 		for {
@@ -208,7 +211,50 @@ func Run(cfg *config.Config) error {
 				if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
 					logger.Printf("lease renew error: %v", err)
 				}
-				prevStats = updateMetrics(reg, meta, natMgr, rec, prevStats)
+				updateMetrics(reg, meta, natMgr, rec)
+			}
+		}
+	}()
+
+	// 17. Bandwidth sampler — dedicated 1s ticker so bandwidth is independent of reconcile.
+	// Reads iptables FORWARD byte counters and maintains an EMA-smoothed rate gauge.
+	go func() {
+		type bwState struct {
+			bytesTX uint64
+			bytesRX uint64
+			txEMA   float64
+			rxEMA   float64
+			ts      time.Time
+		}
+		var prev bwState
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				tx, rx, err := natMgr.GetForwardBytes()
+				if err != nil {
+					logger.Printf("bandwidth read error: %v", err)
+					continue
+				}
+				if !prev.ts.IsZero() {
+					elapsed := now.Sub(prev.ts).Seconds()
+					rawTx := float64(tx-prev.bytesTX) / elapsed
+					rawRx := float64(rx-prev.bytesRX) / elapsed
+					const halfLife = 20.0
+					alpha := 1 - math.Exp(-elapsed/halfLife)
+					txEMA := alpha*rawTx + (1-alpha)*prev.txEMA
+					rxEMA := alpha*rawRx + (1-alpha)*prev.rxEMA
+					reg.TxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(txEMA)
+					reg.RxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(rxEMA)
+					prev.txEMA = txEMA
+					prev.rxEMA = rxEMA
+				}
+				prev.bytesTX = tx
+				prev.bytesRX = rx
+				prev.ts = now
 			}
 		}
 	}()
@@ -355,7 +401,7 @@ func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 	reg.LastFailover.WithLabelValues(deadAZ).Set(float64(time.Now().Unix()))
 }
 
-func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, natMgr nat.Manager, rec *reconciler.Reconciler, prev *iface.Stats) *iface.Stats {
+func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, natMgr nat.Manager, rec *reconciler.Reconciler) {
 	exists, err := natMgr.MasqueradeExists(meta.PublicIface)
 	if err == nil {
 		v := 0.0
@@ -374,18 +420,6 @@ func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, nat
 	for _, rtbID := range rec.OwnedTables() {
 		reg.RouteTableOwned.WithLabelValues(rtbID).Set(1)
 	}
-	// Update TX/RX byte and packet counters with delta since last tick.
-	cur, err := iface.GetStats(meta.PublicIface)
-	if err == nil {
-		if prev != nil {
-			reg.BytesTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.BytesTX - prev.BytesTX))
-			reg.BytesRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.BytesRX - prev.BytesRX))
-			reg.PacketsTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.PacketsTX - prev.PacketsTX))
-			reg.PacketsRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.PacketsRX - prev.PacketsRX))
-		}
-		return cur
-	}
-	return prev
 }
 
 func podNameOrInstanceID(instanceID string) string {

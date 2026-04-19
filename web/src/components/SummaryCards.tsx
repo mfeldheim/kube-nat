@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
 import type { AgentSnap, FailoverEvent } from '../types'
-import { SpeedometerGauge } from './SpeedometerGauge'
 
 function fmtBps(bps: number): string {
   if (bps >= 1e9) return `${(bps / 1e9).toFixed(1)} GB/s`
@@ -26,10 +25,10 @@ export function SummaryCards({ agents, failovers }: Props) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       <Card label="TX" value={fmtBps(totalTx)}>
-        <SpeedometerGauge value={totalTx} max={totalMaxBw} color="#34d399" label="" />
+        {totalMaxBw > 0 && <BwBar ratio={totalTx / totalMaxBw} color="bg-green-500" />}
       </Card>
       <Card label="RX" value={fmtBps(totalRx)}>
-        <SpeedometerGauge value={totalRx} max={totalMaxBw} color="#60a5fa" label="" />
+        {totalMaxBw > 0 && <BwBar ratio={totalRx / totalMaxBw} color="bg-blue-500" />}
       </Card>
       <Card label="Connections" value={totalConn.toLocaleString()}>
         <div className="mt-2 h-1.5 bg-gray-800 rounded">
@@ -51,6 +50,21 @@ function Card({ label, value, children }: { label: string; value: string; childr
       <div className="text-gray-400 text-xs uppercase tracking-widest mb-1">{label}</div>
       <div className="text-2xl font-bold">{value}</div>
       {children}
+    </div>
+  )
+}
+
+function BwBar({ ratio, color }: { ratio: number; color: string }) {
+  const pct = Math.min(ratio * 100, 100)
+  return (
+    <div className="mt-2">
+      <div className="h-1.5 bg-gray-800 rounded">
+        <div
+          className={`h-full rounded ${color} transition-all duration-500`}
+          style={{ width: `${pct.toFixed(1)}%` }}
+        />
+      </div>
+      <div className="text-xs text-gray-500 mt-1">{pct.toFixed(1)}% of capacity</div>
     </div>
   )
 }

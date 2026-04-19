@@ -45,6 +45,10 @@ func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, erro
 	return "nat-lookup", nil
 }
 
+func (f *fakeEC2) DescribeInstanceMaxBandwidth(_ context.Context, _ string) (float64, error) {
+	return 25e9, nil // 25 Gbps
+}
+
 func TestEC2Interface(t *testing.T) {
 	var _ kubenataws.EC2Client = &fakeEC2{}
 }

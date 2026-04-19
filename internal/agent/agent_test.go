@@ -38,6 +38,9 @@ func (f *fakeEC2) ReleaseRouteTable(_ context.Context, _, _ string) error  { ret
 func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, error) {
 	return "nat-fake", nil
 }
+func (f *fakeEC2) DescribeInstanceMaxBandwidth(_ context.Context, _ string) (float64, error) {
+	return 25e9, nil // 25 Gbps
+}
 
 // TestTakeoverAcquiresLeaseAndClaimsRouteTable verifies that when a peer is dead
 // the agent can acquire its expired lease and claim its route tables.

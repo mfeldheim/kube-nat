@@ -56,6 +56,10 @@ func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, erro
 	return "nat-fallback", nil
 }
 
+func (f *fakeEC2) DescribeInstanceMaxBandwidth(_ context.Context, _ string) (float64, error) {
+	return 25e9, nil // 25 Gbps
+}
+
 func TestReconcileVerifiesRules(t *testing.T) {
 	n := &fakeNAT{}
 	e := newFakeEC2("rtb-001", "nat-0abc") // starts pointing at NAT GW

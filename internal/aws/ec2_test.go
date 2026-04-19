@@ -36,6 +36,15 @@ func (f *fakeEC2) ClaimRouteTable(_ context.Context, rtbID, instanceID string) e
 	return nil
 }
 
+func (f *fakeEC2) ReleaseRouteTable(_ context.Context, rtbID, _ string) error {
+	delete(f.routes, rtbID)
+	return nil
+}
+
+func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, error) {
+	return "nat-lookup", nil
+}
+
 func TestEC2Interface(t *testing.T) {
 	var _ kubenataws.EC2Client = &fakeEC2{}
 }

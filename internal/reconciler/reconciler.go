@@ -27,8 +27,10 @@ type Reconciler struct {
 	cfg    Config
 	logger *log.Logger
 
-	mu          sync.RWMutex
-	ownedTables []string // RTB IDs this agent currently owns (auto mode only)
+	mu            sync.RWMutex
+	ownedTables   []string          // RTB IDs this agent currently owns
+	originalNatGW map[string]string // rtbID → nat gateway ID captured at claim time
+	rtbVpcID      map[string]string // rtbID → VPC ID (for fallback nat GW lookup)
 }
 
 func New(cfg Config) *Reconciler {
@@ -37,8 +39,10 @@ func New(cfg Config) *Reconciler {
 		w = os.Stderr
 	}
 	return &Reconciler{
-		cfg:    cfg,
-		logger: log.New(w, "[reconciler] ", log.LstdFlags),
+		cfg:           cfg,
+		logger:        log.New(w, "[reconciler] ", log.LstdFlags),
+		originalNatGW: make(map[string]string),
+		rtbVpcID:      make(map[string]string),
 	}
 }
 
@@ -54,6 +58,8 @@ func (r *Reconciler) OwnedTables() []string {
 
 // Reconcile brings the node into the desired NAT state.
 // Safe to call repeatedly — all operations are idempotent.
+// In auto mode: verifies each owned route table points to this instance and re-claims if not.
+// In manual mode: logs the current route state and the command needed to fix any drift, without acting.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	if err := r.cfg.NATManager.EnsureMasquerade(r.cfg.Iface); err != nil {
 		return fmt.Errorf("ensure masquerade: %w", err)
@@ -67,7 +73,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("discover route tables: %w", err)
 	}
 	if len(tables) == 0 {
-		r.logger.Printf("no route tables found for az=%s (missing kube-nat/managed=true tag?)", r.cfg.AZ)
+		r.logger.Printf("no route tables found for az=%s (check kube-nat/managed=true or kube-nat/discovery tag)", r.cfg.AZ)
 		return nil
 	}
 
@@ -76,25 +82,57 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		region = "<region>"
 	}
 
-	var owned []string
+	var confirmed []string
 	for _, rt := range tables {
 		if r.cfg.Mode == "manual" {
-			r.logger.Printf("[MANUAL] aws ec2 replace-route --route-table-id %s --destination-cidr-block 0.0.0.0/0 --instance-id %s --region %s",
-				rt.ID, r.cfg.InstanceID, region)
+			if rt.InstanceID == r.cfg.InstanceID {
+				r.logger.Printf("[MANUAL] route table %s already points at this instance — ok", rt.ID)
+			} else {
+				current := rt.NatGatewayID
+				if rt.InstanceID != "" {
+					current = rt.InstanceID
+				}
+				r.logger.Printf("[MANUAL] route table %s points at %s (not us) — aws ec2 replace-route --route-table-id %s --destination-cidr-block 0.0.0.0/0 --instance-id %s --region %s",
+					rt.ID, current, rt.ID, r.cfg.InstanceID, region)
+			}
 			continue
 		}
-		if err := r.cfg.EC2Client.ClaimRouteTable(ctx, rt.ID, r.cfg.InstanceID); err != nil {
-			return fmt.Errorf("claim route table %s: %w", rt.ID, err)
-		}
-		r.logger.Printf("claimed route table %s", rt.ID)
-		owned = append(owned, rt.ID)
-	}
 
-	if len(owned) > 0 {
+		// Auto mode: re-claim if the route doesn't already point to us.
+		if rt.InstanceID == r.cfg.InstanceID {
+			r.logger.Printf("route table %s already points at this instance — verified", rt.ID)
+		} else {
+			current := rt.NatGatewayID
+			if rt.InstanceID != "" {
+				current = rt.InstanceID
+			}
+			r.logger.Printf("route table %s points at %s — claiming for this instance", rt.ID, current)
+			if err := r.cfg.EC2Client.ClaimRouteTable(ctx, rt.ID, r.cfg.InstanceID); err != nil {
+				r.logger.Printf("claim route table %s: %v", rt.ID, err)
+				return fmt.Errorf("claim route table %s: %w", rt.ID, err)
+			}
+			r.logger.Printf("claimed route table %s", rt.ID)
+		}
+		confirmed = append(confirmed, rt.ID)
+
+		// Record VPC ID and original NAT GW for fallback (only on first observation).
 		r.mu.Lock()
-		r.ownedTables = owned
+		if rt.VpcID != "" {
+			r.rtbVpcID[rt.ID] = rt.VpcID
+		}
+		if rt.NatGatewayID != "" {
+			if _, exists := r.originalNatGW[rt.ID]; !exists {
+				r.originalNatGW[rt.ID] = rt.NatGatewayID
+			}
+		}
 		r.mu.Unlock()
 	}
+
+	r.mu.Lock()
+	if r.cfg.Mode != "manual" {
+		r.ownedTables = confirmed
+	}
+	r.mu.Unlock()
 	return nil
 }
 
@@ -103,15 +141,19 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 func (r *Reconciler) ClaimRouteTables(ctx context.Context) error {
 	tables, err := r.cfg.EC2Client.DiscoverRouteTables(ctx, r.cfg.AZ)
 	if err != nil {
+		r.logger.Printf("ClaimRouteTables: discover: %v", err)
 		return fmt.Errorf("discover route tables: %w", err)
 	}
 	if len(tables) == 0 {
-		return fmt.Errorf("no route tables found for az=%s (missing kube-nat/managed=true tag?)", r.cfg.AZ)
+		err := fmt.Errorf("no route tables found for az=%s (check kube-nat/managed=true or kube-nat/discovery tag)", r.cfg.AZ)
+		r.logger.Printf("ClaimRouteTables: %v", err)
+		return err
 	}
 
 	var owned []string
 	for _, rt := range tables {
 		if err := r.cfg.EC2Client.ClaimRouteTable(ctx, rt.ID, r.cfg.InstanceID); err != nil {
+			r.logger.Printf("ClaimRouteTables: claim %s: %v", rt.ID, err)
 			return fmt.Errorf("claim route table %s: %w", rt.ID, err)
 		}
 		r.logger.Printf("manually claimed route table %s", rt.ID)
@@ -120,6 +162,68 @@ func (r *Reconciler) ClaimRouteTables(ctx context.Context) error {
 
 	r.mu.Lock()
 	r.ownedTables = owned
+	for _, rt := range tables {
+		if rt.VpcID != "" {
+			r.rtbVpcID[rt.ID] = rt.VpcID
+		}
+		if rt.NatGatewayID != "" {
+			if _, exists := r.originalNatGW[rt.ID]; !exists {
+				r.originalNatGW[rt.ID] = rt.NatGatewayID
+			}
+		}
+	}
+	r.mu.Unlock()
+	return nil
+}
+
+// ReleaseRouteTables restores the 0.0.0.0/0 routes to their original NAT gateways.
+// Used by the fallback HTTP endpoint to hand routing back to AWS NAT GW.
+func (r *Reconciler) ReleaseRouteTables(ctx context.Context) error {
+	r.mu.RLock()
+	owned := make([]string, len(r.ownedTables))
+	copy(owned, r.ownedTables)
+	natGWs := make(map[string]string, len(r.originalNatGW))
+	for k, v := range r.originalNatGW {
+		natGWs[k] = v
+	}
+	vpcIDs := make(map[string]string, len(r.rtbVpcID))
+	for k, v := range r.rtbVpcID {
+		vpcIDs[k] = v
+	}
+	r.mu.RUnlock()
+
+	if len(owned) == 0 {
+		r.logger.Printf("ReleaseRouteTables: no owned tables to release")
+		return nil
+	}
+
+	for _, rtbID := range owned {
+		natGwID := natGWs[rtbID]
+		if natGwID == "" {
+			// Not recorded in memory (e.g. agent restarted while route pointed at us).
+			// Look up the active NAT gateway for this VPC+AZ live from AWS.
+			vpcID := vpcIDs[rtbID]
+			if vpcID == "" {
+				r.logger.Printf("ReleaseRouteTables: no vpc ID known for %s — cannot look up nat gateway, skipping", rtbID)
+				continue
+			}
+			r.logger.Printf("ReleaseRouteTables: no cached nat gateway for %s — looking up in vpc=%s az=%s", rtbID, vpcID, r.cfg.AZ)
+			found, err := r.cfg.EC2Client.LookupNatGateway(ctx, vpcID, r.cfg.AZ)
+			if err != nil {
+				r.logger.Printf("ReleaseRouteTables: lookup nat gateway for %s: %v", rtbID, err)
+				return fmt.Errorf("lookup nat gateway for %s: %w", rtbID, err)
+			}
+			natGwID = found
+		}
+		if err := r.cfg.EC2Client.ReleaseRouteTable(ctx, rtbID, natGwID); err != nil {
+			r.logger.Printf("ReleaseRouteTables: release %s: %v", rtbID, err)
+			return fmt.Errorf("release route table %s: %w", rtbID, err)
+		}
+		r.logger.Printf("released route table %s → nat gateway %s", rtbID, natGwID)
+	}
+
+	r.mu.Lock()
+	r.ownedTables = nil
 	r.mu.Unlock()
 	return nil
 }

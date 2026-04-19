@@ -55,3 +55,20 @@ func AddClaimHandler(mux *http.ServeMux, fn func(ctx context.Context) error) {
 	})
 }
 
+// AddReleaseHandler registers POST /release on mux. fn is called with the request context
+// and should restore route tables to their original NAT gateways.
+func AddReleaseHandler(mux *http.ServeMux, fn func(ctx context.Context) error) {
+	mux.HandleFunc("/release", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := fn(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	})
+}
+

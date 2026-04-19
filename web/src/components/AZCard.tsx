@@ -11,13 +11,14 @@ function fmtBps(bps: number): string {
   return `${bps.toFixed(0)} B/s`
 }
 
-type ClaimState = 'idle' | 'loading' | 'ok' | 'error'
+type BtnState = 'idle' | 'loading' | 'ok' | 'error'
 
 export function AZCard({ agent: a }: Props) {
   const statusDot = a.rule_present && a.src_dst_disabled ? 'bg-green-400' : 'bg-red-400'
   const connPct = a.conntrack_max > 0 ? (a.conntrack_entries / a.conntrack_max) * 100 : 0
   const connBarColor = connPct > 70 ? 'bg-red-500' : connPct > 50 ? 'bg-yellow-400' : 'bg-green-500'
-  const [claimState, setClaimState] = useState<ClaimState>('idle')
+  const [claimState, setClaimState] = useState<BtnState>('idle')
+  const [releaseState, setReleaseState] = useState<BtnState>('idle')
 
   async function handleClaim() {
     setClaimState('loading')
@@ -28,6 +29,17 @@ export function AZCard({ agent: a }: Props) {
       setClaimState('error')
     }
     setTimeout(() => setClaimState('idle'), 3000)
+  }
+
+  async function handleRelease() {
+    setReleaseState('loading')
+    try {
+      const resp = await fetch(`/agents/${encodeURIComponent(a.az)}/release`, { method: 'POST' })
+      setReleaseState(resp.ok ? 'ok' : 'error')
+    } catch {
+      setReleaseState('error')
+    }
+    setTimeout(() => setReleaseState('idle'), 3000)
   }
 
   return (
@@ -76,21 +88,41 @@ export function AZCard({ agent: a }: Props) {
           <Flag ok={a.peer_up} label="peer" />
         </div>
 
-        <button
-          onClick={handleClaim}
-          disabled={claimState === 'loading'}
-          className={`text-xs px-2 py-1 rounded transition-colors ${
-            claimState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
-            claimState === 'ok'      ? 'bg-green-800 text-green-200' :
-            claimState === 'error'   ? 'bg-red-800 text-red-200' :
-            'bg-gray-700 text-gray-300 hover:bg-gray-600'
-          }`}
-        >
-          {claimState === 'loading' ? 'Claiming…' :
-           claimState === 'ok'      ? 'Claimed ✓' :
-           claimState === 'error'   ? 'Failed ✗' :
-           'Claim routes'}
-        </button>
+        <div className="flex gap-2">
+          {a.route_tables?.length > 0 && (
+            <button
+              onClick={handleRelease}
+              disabled={releaseState === 'loading'}
+              className={`text-xs px-2 py-1 rounded transition-colors ${
+                releaseState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
+                releaseState === 'ok'      ? 'bg-green-800 text-green-200' :
+                releaseState === 'error'   ? 'bg-red-800 text-red-200' :
+                'bg-yellow-900 text-yellow-300 hover:bg-yellow-800'
+              }`}
+            >
+              {releaseState === 'loading' ? 'Releasing…' :
+               releaseState === 'ok'      ? 'Released ✓' :
+               releaseState === 'error'   ? 'Failed ✗' :
+               'Fallback to NAT'}
+            </button>
+          )}
+
+          <button
+            onClick={handleClaim}
+            disabled={claimState === 'loading'}
+            className={`text-xs px-2 py-1 rounded transition-colors ${
+              claimState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
+              claimState === 'ok'      ? 'bg-green-800 text-green-200' :
+              claimState === 'error'   ? 'bg-red-800 text-red-200' :
+              'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            {claimState === 'loading' ? 'Claiming…' :
+             claimState === 'ok'      ? 'Claimed ✓' :
+             claimState === 'error'   ? 'Failed ✗' :
+             'Claim routes'}
+          </button>
+        </div>
       </div>
     </div>
   )

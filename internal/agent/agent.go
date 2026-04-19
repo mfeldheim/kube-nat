@@ -40,8 +40,8 @@ func Run(cfg *config.Config) error {
 	logger.Printf("instance=%s az=%s eni=%s iface=%s", meta.InstanceID, meta.AZ, meta.ENIID, meta.PublicIface)
 
 	// 2. AWS EC2 client (IRSA credentials injected via pod env)
-	logger.Printf("initializing AWS EC2 client region=%s tag-prefix=%s", meta.Region, cfg.TagPrefix)
-	ec2Client, err := kubenataws.NewEC2Client(ctx, meta.Region, cfg.TagPrefix)
+	logger.Printf("initializing AWS EC2 client region=%s tag-prefix=%s discovery=%q", meta.Region, cfg.TagPrefix, cfg.DiscoveryValue)
+	ec2Client, err := kubenataws.NewEC2Client(ctx, meta.Region, cfg.TagPrefix, cfg.DiscoveryValue)
 	if err != nil {
 		return fmt.Errorf("aws ec2 client: %w", err)
 	}
@@ -162,11 +162,15 @@ func Run(cfg *config.Config) error {
 		return nil
 	}
 
-	// 15. HTTP server: /metrics /healthz /readyz /claim
+	// 15. HTTP server: /metrics /healthz /readyz /claim /release
 	mux := metrics.NewMux(reg, readyFn)
 	metrics.AddClaimHandler(mux, func(ctx context.Context) error {
 		logger.Printf("manual route table claim triggered via HTTP")
 		return rec.ClaimRouteTables(ctx)
+	})
+	metrics.AddReleaseHandler(mux, func(ctx context.Context) error {
+		logger.Printf("route table release (fallback to NAT gateway) triggered via HTTP")
+		return rec.ReleaseRouteTables(ctx)
 	})
 	httpSrv := &http.Server{
 		Addr:    metrics.ListenAddr(cfg.MetricsPort),

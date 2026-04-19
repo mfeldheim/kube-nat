@@ -19,6 +19,7 @@ type Config struct {
 	ConntrackMax      int
 	IPLocalPortRange  string
 	TagPrefix         string
+	DiscoveryValue    string // when set, filters route tables by tagPrefix/discovery=value
 	Namespace         string
 	ScrapeInterval    time.Duration
 	DashboardPort     int
@@ -37,6 +38,7 @@ func Load() (*Config, error) {
 		ConntrackMax:      getIntEnv("KUBE_NAT_CONNTRACK_MAX", 0),
 		IPLocalPortRange:  getEnv("KUBE_NAT_IP_LOCAL_PORT_RANGE", ""),
 		TagPrefix:         getEnv("KUBE_NAT_TAG_PREFIX", "kube-nat"),
+		DiscoveryValue:    getEnv("KUBE_NAT_DISCOVERY", ""),
 		Namespace:         getEnv("POD_NAMESPACE", "kube-system"),
 		ScrapeInterval:    getDurationEnv("KUBE_NAT_SCRAPE_INTERVAL", 5*time.Second),
 		DashboardPort:     getIntEnv("KUBE_NAT_DASHBOARD_PORT", 8080),

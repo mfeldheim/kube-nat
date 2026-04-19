@@ -34,6 +34,10 @@ func (f *fakeEC2) ClaimRouteTable(_ context.Context, _, _ string) error {
 	f.claimCalled++
 	return nil
 }
+func (f *fakeEC2) ReleaseRouteTable(_ context.Context, _, _ string) error  { return nil }
+func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, error) {
+	return "nat-fake", nil
+}
 
 // TestTakeoverAcquiresLeaseAndClaimsRouteTable verifies that when a peer is dead
 // the agent can acquire its expired lease and claim its route tables.

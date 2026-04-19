@@ -114,20 +114,20 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	return nil
 }
 
-// handleAgentClaim handles POST /agents/{az}/claim.
-// It looks up the agent pod for the given AZ and proxies a POST /claim to it.
+// handleAgentAction handles POST /agents/{az}/{action} where action is "claim" or "release".
+// It looks up the agent pod for the given AZ and proxies the POST to it.
 func (s *Server) handleAgentClaim(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// URL: /agents/{az}/claim
+	// URL: /agents/{az}/{action}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/agents/"), "/")
-	if len(parts) < 2 || parts[1] != "claim" {
+	if len(parts) < 2 || (parts[1] != "claim" && parts[1] != "release") {
 		http.NotFound(w, r)
 		return
 	}
-	az := parts[0]
+	az, action := parts[0], parts[1]
 	if az == "" {
 		http.Error(w, "missing az", http.StatusBadRequest)
 		return
@@ -153,10 +153,10 @@ func (s *Server) handleAgentClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentURL := fmt.Sprintf("http://%s:%d/claim", podIP, s.cfg.MetricsPort)
+	agentURL := fmt.Sprintf("http://%s:%d/%s", podIP, s.cfg.MetricsPort, action)
 	resp, err := http.Post(agentURL, "application/json", nil) //nolint:noctx
 	if err != nil {
-		http.Error(w, fmt.Sprintf("claim request failed: %v", err), http.StatusBadGateway)
+		http.Error(w, fmt.Sprintf("agent request failed: %v", err), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -166,11 +166,17 @@ func (s *Server) handleAgentClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	eventKind := "route_claimed"
+	eventDetail := fmt.Sprintf("manual route table claim triggered for %s", az)
+	if action == "release" {
+		eventKind = "route_released"
+		eventDetail = fmt.Sprintf("routes released to NAT gateway for %s", az)
+	}
 	s.collector.AddEvent(collector.EventEntry{
 		TS:     time.Now().UnixMilli(),
 		AZ:     az,
-		Kind:   "route_claimed",
-		Detail: fmt.Sprintf("manual route table claim triggered for %s", az),
+		Kind:   eventKind,
+		Detail: eventDetail,
 	})
 
 	w.WriteHeader(http.StatusOK)

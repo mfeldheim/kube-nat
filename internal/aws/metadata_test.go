@@ -32,6 +32,9 @@ func newIMDSServer() *httptest.Server {
 	mux.HandleFunc("/latest/meta-data/network/interfaces/macs/0a:1b:2c:3d:4e:5f/device-number", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("0"))
 	})
+	mux.HandleFunc("/latest/meta-data/instance-type", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("c6g.xlarge"))
+	})
 	mux.HandleFunc("/latest/meta-data/spot/termination-time", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
@@ -61,6 +64,9 @@ func TestFetchMetadata(t *testing.T) {
 	}
 	if meta.PublicIface != "eth0" {
 		t.Errorf("want eth0 (device 0) got %s", meta.PublicIface)
+	}
+	if meta.InstanceType != "c6g.xlarge" {
+		t.Errorf("want c6g.xlarge got %s", meta.InstanceType)
 	}
 }
 

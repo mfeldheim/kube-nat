@@ -11,12 +11,13 @@ import (
 )
 
 type InstanceMetadata struct {
-	InstanceID  string
-	AZ          string
-	Region      string
-	ENIID       string
-	MAC         string
-	PublicIface string // Linux interface name, e.g. "eth0" (derived from device-number)
+	InstanceID   string
+	AZ           string
+	Region       string
+	ENIID        string
+	MAC          string
+	PublicIface  string // Linux interface name, e.g. "eth0" (derived from device-number)
+	InstanceType string // e.g. "c6g.xlarge"
 }
 
 type MetadataClient struct {
@@ -71,14 +72,19 @@ func (c *MetadataClient) Fetch(ctx context.Context) (*InstanceMetadata, error) {
 	if err != nil {
 		return nil, fmt.Errorf("device-number %q: %w", deviceNum, err)
 	}
+	instanceType, err := get("/latest/meta-data/instance-type")
+	if err != nil {
+		return nil, err
+	}
 
 	return &InstanceMetadata{
-		InstanceID:  instanceID,
-		AZ:          az,
-		Region:      region,
-		ENIID:       eniID,
-		MAC:         mac,
-		PublicIface: iface,
+		InstanceID:   instanceID,
+		AZ:           az,
+		Region:       region,
+		ENIID:        eniID,
+		MAC:          mac,
+		PublicIface:  iface,
+		InstanceType: instanceType,
 	}, nil
 }
 

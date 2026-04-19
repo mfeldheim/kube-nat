@@ -47,9 +47,8 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          push: true
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,push-by-digest=true,name-canonical=true
+          outputs: type=image,name=ghcr.io/mfeldheim/kube-nat,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 

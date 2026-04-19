@@ -3,6 +3,8 @@ package aws
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -25,6 +27,7 @@ type EC2Client interface {
 	ClaimRouteTable(ctx context.Context, rtbID, instanceID string) error
 	ReleaseRouteTable(ctx context.Context, rtbID, natGatewayID string) error
 	LookupNatGateway(ctx context.Context, vpcID, az string) (string, error)
+	DescribeInstanceMaxBandwidth(ctx context.Context, instanceType string) (float64, error)
 }
 
 type realEC2Client struct {
@@ -177,4 +180,49 @@ func (c *realEC2Client) LookupNatGateway(ctx context.Context, vpcID, preferAZ st
 		return anyGW, nil
 	}
 	return "", fmt.Errorf("no available nat gateway found in vpc=%s", vpcID)
+}
+
+// DescribeInstanceMaxBandwidth returns the peak network bandwidth in bytes/s for
+// the given instance type by parsing the NetworkPerformance string from
+// DescribeInstanceTypes (e.g. "25 Gbps", "Up to 25 Gbps").
+func (c *realEC2Client) DescribeInstanceMaxBandwidth(ctx context.Context, instanceType string) (float64, error) {
+	out, err := c.svc.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{
+		InstanceTypes: []types.InstanceType{types.InstanceType(instanceType)},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("describe instance types %s: %w", instanceType, err)
+	}
+	if len(out.InstanceTypes) == 0 {
+		return 0, fmt.Errorf("instance type %s not found", instanceType)
+	}
+	ni := out.InstanceTypes[0].NetworkInfo
+	if ni == nil {
+		return 0, fmt.Errorf("no network info for instance type %s", instanceType)
+	}
+	if ni.NetworkPerformance != nil {
+		return parseNetworkPerformanceBps(*ni.NetworkPerformance)
+	}
+	return 0, fmt.Errorf("cannot determine max bandwidth for instance type %s", instanceType)
+}
+
+// parseNetworkPerformanceBps parses a NetworkPerformance string like "25 Gbps",
+// "Up to 25 Gbps", or "10 Gbps" into bytes per second.
+func parseNetworkPerformanceBps(s string) (float64, error) {
+	s = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "up to ")
+	parts := strings.Fields(s)
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("cannot parse network performance %q", s)
+	}
+	val, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, fmt.Errorf("cannot parse network performance %q: %w", s, err)
+	}
+	switch strings.ToLower(parts[1]) {
+	case "gbps":
+		return val * 1e9, nil
+	case "mbps":
+		return val * 1e6, nil
+	default:
+		return 0, fmt.Errorf("unknown unit in network performance %q", s)
+	}
 }

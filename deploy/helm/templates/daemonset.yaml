@@ -55,6 +55,10 @@ spec:
         - name: KUBE_NAT_CONNTRACK_MAX
           value: {{ .Values.agent.conntrackMax | quote }}
         {{- end }}
+        {{- if .Values.agent.discovery }}
+        - name: KUBE_NAT_DISCOVERY
+          value: {{ .Values.agent.discovery | quote }}
+        {{- end }}
         ports:
         - name: metrics
           containerPort: 9100

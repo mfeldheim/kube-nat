@@ -114,7 +114,6 @@ func Run(cfg *config.Config) error {
 		return fmt.Errorf("initial reconcile: %w", err)
 	}
 	logger.Printf("initial reconcile complete")
-	reg.RouteTableOwned.WithLabelValues("own").Set(1)
 
 	// 10. Write own Lease
 	podName := podNameOrInstanceID(meta.InstanceID)
@@ -196,7 +195,7 @@ func Run(cfg *config.Config) error {
 				if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
 					logger.Printf("lease renew error: %v", err)
 				}
-				updateMetrics(reg, meta, natMgr)
+				updateMetrics(reg, meta, natMgr, rec)
 			}
 		}
 	}()
@@ -343,7 +342,7 @@ func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 	reg.LastFailover.WithLabelValues(deadAZ).Set(float64(time.Now().Unix()))
 }
 
-func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, natMgr nat.Manager) {
+func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, natMgr nat.Manager, rec *reconciler.Reconciler) {
 	exists, err := natMgr.MasqueradeExists(meta.PublicIface)
 	if err == nil {
 		v := 0.0
@@ -357,6 +356,10 @@ func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, nat
 		reg.ConntrackEntries.Set(float64(count))
 		reg.ConntrackMax.Set(float64(max))
 		reg.ConntrackUsageRatio.Set(float64(count) / float64(max))
+	}
+	// Update route table ownership gauge with real RTB IDs.
+	for _, rtbID := range rec.OwnedTables() {
+		reg.RouteTableOwned.WithLabelValues(rtbID).Set(1)
 	}
 }
 

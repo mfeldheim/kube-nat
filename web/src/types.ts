@@ -12,6 +12,7 @@ export interface AgentSnap {
   rule_present: boolean
   src_dst_disabled: boolean
   last_failover_ts: number  // unix seconds, 0 if never
+  max_bw_bps: number        // peak network bandwidth in bytes/s
 }
 
 export interface HistoryPoint {

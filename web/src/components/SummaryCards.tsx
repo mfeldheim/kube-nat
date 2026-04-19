@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { AgentSnap, FailoverEvent } from '../types'
+import { SpeedometerGauge } from './SpeedometerGauge'
 
 function fmtBps(bps: number): string {
   if (bps >= 1e9) return `${(bps / 1e9).toFixed(1)} GB/s`
@@ -20,11 +21,16 @@ export function SummaryCards({ agents, failovers }: Props) {
   const maxConn = agents.reduce((s, a) => s + a.conntrack_max, 0)
   const connRatio = maxConn > 0 ? totalConn / maxConn : 0
   const fo24h = failovers.filter((f) => f.ts > Date.now() / 1000 - 86400).length
+  const totalMaxBw = agents.reduce((s, a) => s + (a.max_bw_bps ?? 0), 0)
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <Card label="TX" value={fmtBps(totalTx)} />
-      <Card label="RX" value={fmtBps(totalRx)} />
+      <Card label="TX" value={fmtBps(totalTx)}>
+        <SpeedometerGauge value={totalTx} max={totalMaxBw} color="#34d399" label="" />
+      </Card>
+      <Card label="RX" value={fmtBps(totalRx)}>
+        <SpeedometerGauge value={totalRx} max={totalMaxBw} color="#60a5fa" label="" />
+      </Card>
       <Card label="Connections" value={totalConn.toLocaleString()}>
         <div className="mt-2 h-1.5 bg-gray-800 rounded">
           <div

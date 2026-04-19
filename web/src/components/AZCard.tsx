@@ -1,14 +1,9 @@
 import { useState } from 'react'
 import type { AgentSnap } from '../types'
+import { SpeedometerGauge } from './SpeedometerGauge'
 
 interface Props {
   agent: AgentSnap
-}
-
-function fmtBps(bps: number): string {
-  if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} MB/s`
-  if (bps >= 1e3) return `${(bps / 1e3).toFixed(1)} KB/s`
-  return `${bps.toFixed(0)} B/s`
 }
 
 type BtnState = 'idle' | 'loading' | 'ok' | 'error'
@@ -58,9 +53,9 @@ export function AZCard({ agent: a }: Props) {
 
       <div className="text-xs text-gray-400">{a.instance_id || '—'}</div>
 
-      <div className="flex gap-4 text-sm">
-        <div><span className="text-gray-400">TX </span><span>{fmtBps(a.tx_bps)}</span></div>
-        <div><span className="text-gray-400">RX </span><span>{fmtBps(a.rx_bps)}</span></div>
+      <div className="flex gap-3 justify-center">
+        <SpeedometerGauge value={a.tx_bps} max={a.max_bw_bps ?? 0} color="#34d399" label="TX" />
+        <SpeedometerGauge value={a.rx_bps} max={a.max_bw_bps ?? 0} color="#60a5fa" label="RX" />
       </div>
 
       <div>
@@ -93,7 +88,7 @@ export function AZCard({ agent: a }: Props) {
             <button
               onClick={handleRelease}
               disabled={releaseState === 'loading'}
-              className={`text-xs px-2 py-1 rounded transition-colors ${
+              className={`text-xs px-2 py-1 rounded whitespace-nowrap transition-colors ${
                 releaseState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
                 releaseState === 'ok'      ? 'bg-green-800 text-green-200' :
                 releaseState === 'error'   ? 'bg-red-800 text-red-200' :
@@ -107,21 +102,23 @@ export function AZCard({ agent: a }: Props) {
             </button>
           )}
 
-          <button
-            onClick={handleClaim}
-            disabled={claimState === 'loading'}
-            className={`text-xs px-2 py-1 rounded transition-colors ${
-              claimState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
-              claimState === 'ok'      ? 'bg-green-800 text-green-200' :
-              claimState === 'error'   ? 'bg-red-800 text-red-200' :
-              'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            {claimState === 'loading' ? 'Claiming…' :
-             claimState === 'ok'      ? 'Claimed ✓' :
-             claimState === 'error'   ? 'Failed ✗' :
-             'Claim routes'}
-          </button>
+          {!(a.route_tables?.length > 0) && (
+            <button
+              onClick={handleClaim}
+              disabled={claimState === 'loading'}
+              className={`text-xs px-2 py-1 rounded whitespace-nowrap transition-colors ${
+                claimState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
+                claimState === 'ok'      ? 'bg-green-800 text-green-200' :
+                claimState === 'error'   ? 'bg-red-800 text-red-200' :
+                'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              {claimState === 'loading' ? 'Claiming…' :
+               claimState === 'ok'      ? 'Claimed ✓' :
+               claimState === 'error'   ? 'Failed ✗' :
+               'Claim routes'}
+            </button>
+          )}
         </div>
       </div>
     </div>

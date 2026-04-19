@@ -258,6 +258,7 @@ func (c *Collector) buildSnap(podIP string, families map[string]*dto.MetricFamil
 	snap.RulePresent = gaugeVal(families, "kube_nat_rule_present") >= 1
 	snap.SrcDstDisabled = gaugeVal(families, "kube_nat_src_dst_check_disabled") >= 1
 	snap.SpotPending = gaugeVal(families, "kube_nat_spot_interruption_pending") >= 1
+	snap.MaxBandwidthBps = gaugeVal(families, "kube_nat_max_bandwidth_bps")
 
 	// Collect owned route tables (all rtb_id labels with value >= 1).
 	if mf, ok := families["kube_nat_route_table_owned"]; ok {

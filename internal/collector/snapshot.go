@@ -33,7 +33,8 @@ type AgentSnap struct {
 	SpotPending      bool     `json:"spot_pending"`
 	RulePresent      bool     `json:"rule_present"`
 	SrcDstDisabled   bool     `json:"src_dst_disabled"`
-	LastFailoverTS   float64  `json:"last_failover_ts"` // unix seconds, 0 if never
+	LastFailoverTS  float64  `json:"last_failover_ts"` // unix seconds, 0 if never
+	MaxBandwidthBps float64  `json:"max_bw_bps"`       // peak network bandwidth in bytes/s
 }
 
 // HistoryPoint is one bandwidth sample for the sparkline.

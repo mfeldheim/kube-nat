@@ -80,6 +80,14 @@ func Run(cfg *config.Config) error {
 	reg.PacketsTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface)
 	reg.PacketsRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface)
 
+	// Fetch and expose peak network bandwidth for this instance type.
+	if maxBps, err := ec2Client.DescribeInstanceMaxBandwidth(ctx, meta.InstanceType); err != nil {
+		logger.Printf("WARNING: could not determine max bandwidth for %s: %v", meta.InstanceType, err)
+	} else {
+		reg.MaxBandwidthBps.Set(maxBps)
+		logger.Printf("instance type=%s peak bandwidth=%.0f bps (%.1f Gbps)", meta.InstanceType, maxBps, maxBps/1e9)
+	}
+
 	// 6. Kubernetes client (in-cluster)
 	logger.Printf("initializing Kubernetes in-cluster client")
 	k8sCfg, err := rest.InClusterConfig()
@@ -185,6 +193,7 @@ func Run(cfg *config.Config) error {
 
 	// 16. Reconciliation loop
 	go func() {
+		var prevStats *iface.Stats
 		ticker := time.NewTicker(cfg.ReconcileInterval)
 		defer ticker.Stop()
 		for {
@@ -199,7 +208,7 @@ func Run(cfg *config.Config) error {
 				if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
 					logger.Printf("lease renew error: %v", err)
 				}
-				updateMetrics(reg, meta, natMgr, rec)
+				prevStats = updateMetrics(reg, meta, natMgr, rec, prevStats)
 			}
 		}
 	}()
@@ -346,7 +355,7 @@ func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 	reg.LastFailover.WithLabelValues(deadAZ).Set(float64(time.Now().Unix()))
 }
 
-func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, natMgr nat.Manager, rec *reconciler.Reconciler) {
+func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, natMgr nat.Manager, rec *reconciler.Reconciler, prev *iface.Stats) *iface.Stats {
 	exists, err := natMgr.MasqueradeExists(meta.PublicIface)
 	if err == nil {
 		v := 0.0
@@ -365,6 +374,18 @@ func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, nat
 	for _, rtbID := range rec.OwnedTables() {
 		reg.RouteTableOwned.WithLabelValues(rtbID).Set(1)
 	}
+	// Update TX/RX byte and packet counters with delta since last tick.
+	cur, err := iface.GetStats(meta.PublicIface)
+	if err == nil {
+		if prev != nil {
+			reg.BytesTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.BytesTX - prev.BytesTX))
+			reg.BytesRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.BytesRX - prev.BytesRX))
+			reg.PacketsTX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.PacketsTX - prev.PacketsTX))
+			reg.PacketsRX.WithLabelValues(meta.AZ, meta.InstanceID, meta.PublicIface).Add(float64(cur.PacketsRX - prev.PacketsRX))
+		}
+		return cur
+	}
+	return prev
 }
 
 func podNameOrInstanceID(instanceID string) string {

@@ -24,6 +24,7 @@ type Registry struct {
 	LastFailover  *prometheus.GaugeVec
 
 	SpotInterruptionPending prometheus.Gauge
+	MaxBandwidthBps         prometheus.Gauge
 
 	reg *prometheus.Registry
 }
@@ -76,13 +77,17 @@ func NewRegistry() *Registry {
 	m.SpotInterruptionPending = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "kube_nat_spot_interruption_pending", Help: "1 if a spot interruption notice has been received",
 	})
+	m.MaxBandwidthBps = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_nat_max_bandwidth_bps",
+		Help: "Peak network bandwidth of this instance in bytes/s (from EC2 DescribeInstanceTypes)",
+	})
 
 	r.MustRegister(
 		m.BytesTX, m.BytesRX, m.PacketsTX, m.PacketsRX,
 		m.ConntrackEntries, m.ConntrackMax, m.ConntrackUsageRatio,
 		m.RulePresent, m.SrcDstCheckDisabled, m.RouteTableOwned,
 		m.PeerStatus, m.FailoverTotal, m.LastFailover,
-		m.SpotInterruptionPending,
+		m.SpotInterruptionPending, m.MaxBandwidthBps,
 	)
 	return m
 }

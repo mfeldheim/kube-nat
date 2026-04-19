@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -132,20 +133,23 @@ func Run(cfg *config.Config) error {
 	go peerSrv.Serve(ctx)
 	logger.Printf("peer server on %s", peerAddr)
 
-	// 12. Peer watcher — discovers other agents and monitors their health
-	var peerClients []*peer.Client
-	go func() {
-		clients := startPeerWatcher(ctx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger)
-		peerClients = clients
-	}()
+	// 12. Peer watcher — discovers other agents and monitors their health.
+	// Runs periodically so agents that start after us are still discovered.
+	var (
+		peerMu      sync.Mutex
+		peerClients []*peer.Client
+	)
+	go startPeerWatcher(ctx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, &peerMu, &peerClients)
 
 	// 13. Spot watcher — proactive step-down on interruption notice
 	spotWatcher := spot.NewWatcher("", time.Second, func() {
 		logger.Printf("spot interruption notice — initiating step-down")
 		reg.SpotInterruptionPending.Set(1)
+		peerMu.Lock()
 		for _, c := range peerClients {
 			c.SendStepDown()
 		}
+		peerMu.Unlock()
 		cancel()
 	})
 	go spotWatcher.Run(ctx)
@@ -159,8 +163,12 @@ func Run(cfg *config.Config) error {
 		return nil
 	}
 
-	// 15. HTTP server: /metrics /healthz /readyz
+	// 15. HTTP server: /metrics /healthz /readyz /claim
 	mux := metrics.NewMux(reg, readyFn)
+	metrics.AddClaimHandler(mux, func(ctx context.Context) error {
+		logger.Printf("manual route table claim triggered via HTTP")
+		return rec.ClaimRouteTables(ctx)
+	})
 	httpSrv := &http.Server{
 		Addr:    metrics.ListenAddr(cfg.MetricsPort),
 		Handler: mux,
@@ -198,57 +206,79 @@ func Run(cfg *config.Config) error {
 
 	logger.Printf("shutting down — sending step-down to peers")
 	ready = false
+	peerMu.Lock()
 	for _, c := range peerClients {
 		c.SendStepDown()
 	}
+	peerMu.Unlock()
 	time.Sleep(100 * time.Millisecond) // allow step-down to propagate
 	httpSrv.Shutdown(context.Background())
 	return nil
 }
 
-// startPeerWatcher discovers peer agent pods via k8s API and connects to each.
-// Returns the list of clients so the caller can send step-down on shutdown.
+// startPeerWatcher runs a periodic pod-list loop, connecting to any peer agent
+// pods that haven't been seen before. This ensures agents that start after us
+// are still discovered and monitored. connectedAZs tracks which AZs already
+// have an active client so we don't create duplicates.
 func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kubernetes.Interface,
 	leaseMgr *lease.Manager, ec2Client kubenataws.EC2Client,
-	meta *kubenataws.InstanceMetadata, reg *metrics.Registry, logger *log.Logger) []*peer.Client {
+	meta *kubenataws.InstanceMetadata, reg *metrics.Registry, logger *log.Logger,
+	mu *sync.Mutex, clients *[]*peer.Client) {
 
-	podList, err := k8sClient.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=kube-nat,component=agent",
-	})
-	if err != nil {
-		logger.Printf("peer discovery: list pods: %v", err)
-		return nil
-	}
-
-	var clients []*peer.Client
-	for _, pod := range podList.Items {
-		podAZ := pod.Labels[cfg.AZLabel]
-		if podAZ == meta.AZ || pod.Status.PodIP == "" {
-			continue
-		}
-		peerAddr := fmt.Sprintf("%s:%d", pod.Status.PodIP, cfg.PeerPort)
-		peerAZ := podAZ
-		peerInstanceID := pod.Spec.NodeName
-
-		reg.PeerStatus.WithLabelValues(peerAZ, peerInstanceID).Set(1)
-
-		c := peer.NewClient(peerAZ, peer.ClientConfig{
-			ProbeInterval: cfg.ProbeInterval,
-			ProbeFailures: cfg.ProbeFailures,
-			OnFailure: func(az string) {
-				reg.PeerStatus.WithLabelValues(az, peerInstanceID).Set(0)
-				logger.Printf("peer %s declared dead — attempting takeover", az)
-				takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
-			},
-			OnStepDown: func(az string) {
-				logger.Printf("peer %s stepping down — taking over", az)
-				takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
-			},
+	connectedAZs := make(map[string]bool)
+	discover := func() {
+		podList, err := k8sClient.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "app=kube-nat,component=agent",
 		})
-		go c.Connect(ctx, peerAddr)
-		clients = append(clients, c)
+		if err != nil {
+			logger.Printf("peer discovery: list pods: %v", err)
+			return
+		}
+		for _, pod := range podList.Items {
+			podAZ := pod.Labels[cfg.AZLabel]
+			if podAZ == meta.AZ || pod.Status.PodIP == "" || connectedAZs[podAZ] {
+				continue
+			}
+			peerAddr := fmt.Sprintf("%s:%d", pod.Status.PodIP, cfg.PeerPort)
+			peerAZ := podAZ
+			peerInstanceID := pod.Spec.NodeName
+
+			logger.Printf("discovered peer az=%s instance=%s addr=%s", peerAZ, peerInstanceID, peerAddr)
+			reg.PeerStatus.WithLabelValues(peerAZ, peerInstanceID).Set(1)
+			connectedAZs[peerAZ] = true
+
+			c := peer.NewClient(peerAZ, peer.ClientConfig{
+				ProbeInterval: cfg.ProbeInterval,
+				ProbeFailures: cfg.ProbeFailures,
+				OnFailure: func(az string) {
+					reg.PeerStatus.WithLabelValues(az, peerInstanceID).Set(0)
+					logger.Printf("peer %s declared dead — attempting takeover", az)
+					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
+				},
+				OnStepDown: func(az string) {
+					logger.Printf("peer %s stepping down — taking over", az)
+					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
+				},
+			})
+			mu.Lock()
+			*clients = append(*clients, c)
+			mu.Unlock()
+			go c.Connect(ctx, peerAddr)
+		}
 	}
-	return clients
+
+	// Run immediately, then on every reconcile interval.
+	discover()
+	ticker := time.NewTicker(cfg.ReconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			discover()
+		}
+	}
 }
 
 func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,

@@ -3,15 +3,18 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kube-nat/kube-nat/internal/collector"
 	webui "github.com/kube-nat/kube-nat/web"
 	"nhooyr.io/websocket"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -64,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/ws", s.handleWS)
+	mux.HandleFunc("/agents/", s.handleAgentClaim)
 
 	return mux
 }
@@ -110,7 +114,68 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	return nil
 }
 
-// handleWS upgrades to WebSocket and registers the client with the hub.
+// handleAgentClaim handles POST /agents/{az}/claim.
+// It looks up the agent pod for the given AZ and proxies a POST /claim to it.
+func (s *Server) handleAgentClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// URL: /agents/{az}/claim
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/agents/"), "/")
+	if len(parts) < 2 || parts[1] != "claim" {
+		http.NotFound(w, r)
+		return
+	}
+	az := parts[0]
+	if az == "" {
+		http.Error(w, "missing az", http.StatusBadRequest)
+		return
+	}
+
+	pods, err := s.cfg.K8sClient.CoreV1().Pods(s.cfg.Namespace).List(r.Context(), metav1.ListOptions{
+		LabelSelector: "app=kube-nat,component=agent",
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("list pods: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var podIP string
+	for _, pod := range pods.Items {
+		if pod.Labels["topology.kubernetes.io/zone"] == az && pod.Status.PodIP != "" {
+			podIP = pod.Status.PodIP
+			break
+		}
+	}
+	if podIP == "" {
+		http.Error(w, fmt.Sprintf("no agent pod found for az %s", az), http.StatusNotFound)
+		return
+	}
+
+	agentURL := fmt.Sprintf("http://%s:%d/claim", podIP, s.cfg.MetricsPort)
+	resp, err := http.Post(agentURL, "application/json", nil) //nolint:noctx
+	if err != nil {
+		http.Error(w, fmt.Sprintf("claim request failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, fmt.Sprintf("agent returned %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	s.collector.AddEvent(collector.EventEntry{
+		TS:     time.Now().UnixMilli(),
+		AZ:     az,
+		Kind:   "route_claimed",
+		Detail: fmt.Sprintf("manual route table claim triggered for %s", az),
+	})
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true, // allow any Origin for kubectl port-forward use

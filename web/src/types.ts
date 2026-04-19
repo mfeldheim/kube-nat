@@ -26,9 +26,17 @@ export interface FailoverEvent {
   ts: number    // unix seconds
 }
 
+export interface EventEntry {
+  ts: number    // unix milliseconds
+  az: string
+  kind: 'failover' | 'peer_down' | 'peer_up' | 'agent_appeared' | 'agent_lost' | 'route_claimed'
+  detail: string
+}
+
 export interface Snapshot {
   ts: string          // ISO timestamp
   agents: AgentSnap[]
   history: HistoryPoint[]
   failovers: FailoverEvent[]
+  events: EventEntry[]
 }

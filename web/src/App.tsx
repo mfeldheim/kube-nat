@@ -3,7 +3,7 @@ import { Header } from './components/Header'
 import { SummaryCards } from './components/SummaryCards'
 import { AZCard } from './components/AZCard'
 import { BandwidthChart } from './components/BandwidthChart'
-import { FailoverLog } from './components/FailoverLog'
+import { EventLog } from './components/EventLog'
 
 export default function App() {
   const snap = useWebSocket()
@@ -26,7 +26,7 @@ export default function App() {
         ))}
       </div>
       <BandwidthChart history={snap.history} />
-      <FailoverLog failovers={snap.failovers} />
+      <EventLog events={snap.events ?? []} />
     </div>
   )
 }

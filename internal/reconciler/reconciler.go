@@ -38,7 +38,21 @@ func New(cfg Config) *Reconciler {
 	}
 }
 
-// Reconcile brings the node into the desired NAT state.
+// ClaimRouteTables discovers and immediately claims route tables for this AZ,
+// regardless of the configured mode. Used by the manual-claim HTTP endpoint.
+func (r *Reconciler) ClaimRouteTables(ctx context.Context) error {
+	tables, err := r.cfg.EC2Client.DiscoverRouteTables(ctx, r.cfg.AZ)
+	if err != nil {
+		return fmt.Errorf("discover route tables: %w", err)
+	}
+	for _, rt := range tables {
+		if err := r.cfg.EC2Client.ClaimRouteTable(ctx, rt.ID, r.cfg.InstanceID); err != nil {
+			return fmt.Errorf("claim route table %s: %w", rt.ID, err)
+		}
+		r.logger.Printf("manually claimed route table %s", rt.ID)
+	}
+	return nil
+}
 // Safe to call repeatedly — all operations are idempotent.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	if err := r.cfg.NATManager.EnsureMasquerade(r.cfg.Iface); err != nil {

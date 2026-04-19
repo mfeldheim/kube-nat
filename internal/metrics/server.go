@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -36,3 +37,21 @@ func NewMux(reg *Registry, readyFn func() error) *http.ServeMux {
 	})
 	return mux
 }
+
+// AddClaimHandler registers POST /claim on mux. fn is called with the request context
+// and should trigger an immediate route table claim for this agent.
+func AddClaimHandler(mux *http.ServeMux, fn func(ctx context.Context) error) {
+	mux.HandleFunc("/claim", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := fn(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	})
+}
+

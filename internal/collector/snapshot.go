@@ -8,6 +8,15 @@ type Snapshot struct {
 	Agents    []AgentSnap     `json:"agents"`
 	History   []HistoryPoint  `json:"history"`  // last 60 points (5 min at 5s interval)
 	Failovers []FailoverEvent `json:"failovers"`
+	Events    []EventEntry    `json:"events"`   // last 100 events since dashboard start
+}
+
+// EventEntry is a single entry in the event log (state transitions + manual actions).
+type EventEntry struct {
+	TS     int64  `json:"ts"`     // unix milliseconds
+	AZ     string `json:"az"`
+	Kind   string `json:"kind"`   // "failover","peer_down","peer_up","agent_appeared","agent_lost","route_claimed"
+	Detail string `json:"detail"`
 }
 
 // AgentSnap is the scraped + derived state for a single NAT agent.

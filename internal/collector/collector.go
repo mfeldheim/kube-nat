@@ -31,24 +31,70 @@ type prevCounters struct {
 	ts      time.Time
 }
 
+// agentState tracks the last known health state per AZ for event detection.
+type agentState struct {
+	peerUp      bool
+	rulePresent bool
+}
+
 // Collector discovers agent pods and scrapes their metrics.
 type Collector struct {
-	cfg     Config
-	client  *http.Client
-	mu      sync.Mutex
+	cfg    Config
+	client *http.Client
+	mu     sync.Mutex
+
 	prev    map[string]prevCounters // keyed by pod IP
 	history []HistoryPoint          // ring buffer, max 60 entries
-	seen    map[string]float64      // last seen kube_nat_last_failover_seconds per AZ
+
+	// persistent event log across scrape cycles
+	events    []EventEntry
+	failovers []FailoverEvent
+
+	// state tracking for event detection
+	seenAZs     map[string]bool       // AZs we have previously observed
+	agentStates map[string]agentState // last known state per AZ
+	lastFailoverTS map[string]float64 // last seen kube_nat_last_failover_seconds per AZ
 }
 
 // New creates a Collector.
 func New(cfg Config) *Collector {
 	return &Collector{
-		cfg:    cfg,
-		client: &http.Client{Timeout: 3 * time.Second},
-		prev:   make(map[string]prevCounters),
-		seen:   make(map[string]float64),
+		cfg:            cfg,
+		client:         &http.Client{Timeout: 3 * time.Second},
+		prev:           make(map[string]prevCounters),
+		seenAZs:        make(map[string]bool),
+		agentStates:    make(map[string]agentState),
+		lastFailoverTS: make(map[string]float64),
 	}
+}
+
+// AddEvent appends a user-generated event (e.g. manual route claim) to the log.
+func (c *Collector) AddEvent(entry EventEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.appendEvent(entry)
+}
+
+// appendEvent appends an event and trims the ring buffer to 100. Caller must hold c.mu.
+func (c *Collector) appendEvent(entry EventEntry) {
+	c.events = append(c.events, entry)
+	if len(c.events) > 100 {
+		c.events = c.events[len(c.events)-100:]
+	}
+}
+
+// appendFailover adds a persistent failover record and a corresponding event. Caller must hold c.mu.
+func (c *Collector) appendFailover(f FailoverEvent) {
+	c.failovers = append(c.failovers, f)
+	if len(c.failovers) > 100 {
+		c.failovers = c.failovers[len(c.failovers)-100:]
+	}
+	c.appendEvent(EventEntry{
+		TS:     time.Now().UnixMilli(),
+		AZ:     f.FromAZ,
+		Kind:   "failover",
+		Detail: fmt.Sprintf("route table for %s taken over by %s", f.FromAZ, f.ToAZ),
+	})
 }
 
 // Collect discovers all agent pods, scrapes metrics, and returns a Snapshot.
@@ -61,11 +107,13 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	}
 
 	var (
-		agents    = make([]AgentSnap, 0)
-		totalTx   float64
-		totalRx   float64
-		failovers = make([]FailoverEvent, 0)
+		agents  = make([]AgentSnap, 0)
+		totalTx float64
+		totalRx float64
 	)
+
+	// Track which AZs are present in this scrape to detect disappeared agents.
+	currentAZs := make(map[string]bool)
 
 	for _, pod := range pods.Items {
 		if pod.Status.PodIP == "" {
@@ -81,19 +129,51 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		if snap == nil {
 			continue
 		}
+		currentAZs[snap.AZ] = true
+
+		c.mu.Lock()
+
+		// Detect agent first appearance.
+		if !c.seenAZs[snap.AZ] {
+			c.seenAZs[snap.AZ] = true
+			c.appendEvent(EventEntry{
+				TS:     time.Now().UnixMilli(),
+				AZ:     snap.AZ,
+				Kind:   "agent_appeared",
+				Detail: fmt.Sprintf("agent %s appeared in %s", snap.InstanceID, snap.AZ),
+			})
+		}
+
+		// Detect peer_up transitions.
+		if prev, ok := c.agentStates[snap.AZ]; ok {
+			if !prev.peerUp && snap.PeerUp {
+				c.appendEvent(EventEntry{
+					TS:     time.Now().UnixMilli(),
+					AZ:     snap.AZ,
+					Kind:   "peer_up",
+					Detail: fmt.Sprintf("peer connection restored for %s", snap.AZ),
+				})
+			} else if prev.peerUp && !snap.PeerUp {
+				c.appendEvent(EventEntry{
+					TS:     time.Now().UnixMilli(),
+					AZ:     snap.AZ,
+					Kind:   "peer_down",
+					Detail: fmt.Sprintf("peer connection lost for %s", snap.AZ),
+				})
+			}
+		}
+		c.agentStates[snap.AZ] = agentState{peerUp: snap.PeerUp, rulePresent: snap.RulePresent}
 
 		// Detect failover events from changes in kube_nat_last_failover_seconds.
-		c.mu.Lock()
-		if prev, ok := c.seen[snap.AZ]; ok && snap.LastFailoverTS > 0 && snap.LastFailoverTS != prev {
-			failovers = append(failovers, FailoverEvent{
+		if snap.LastFailoverTS > 0 && snap.LastFailoverTS != c.lastFailoverTS[snap.AZ] {
+			c.appendFailover(FailoverEvent{
 				FromAZ: snap.AZ,
 				ToAZ:   snap.AZ,
 				TS:     snap.LastFailoverTS,
 			})
+			c.lastFailoverTS[snap.AZ] = snap.LastFailoverTS
 		}
-		if snap.LastFailoverTS > 0 {
-			c.seen[snap.AZ] = snap.LastFailoverTS
-		}
+
 		c.mu.Unlock()
 
 		agents = append(agents, *snap)
@@ -101,8 +181,21 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		totalRx += snap.RxBytesPerSec
 	}
 
-	// Maintain history ring buffer (last 60 points = 5 min at 5s interval).
+	// Detect agents that were previously seen but are missing this scrape.
 	c.mu.Lock()
+	for az := range c.seenAZs {
+		if !currentAZs[az] {
+			delete(c.seenAZs, az)
+			c.appendEvent(EventEntry{
+				TS:     time.Now().UnixMilli(),
+				AZ:     az,
+				Kind:   "agent_lost",
+				Detail: fmt.Sprintf("agent in %s became unreachable", az),
+			})
+		}
+	}
+
+	// Maintain history ring buffer (last 60 points = 5 min at 5s interval).
 	c.history = append(c.history, HistoryPoint{
 		TS:    time.Now().UnixMilli(),
 		TxBps: totalTx,
@@ -113,13 +206,20 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	}
 	historyCopy := make([]HistoryPoint, len(c.history))
 	copy(historyCopy, c.history)
+
+	failoversCopy := make([]FailoverEvent, len(c.failovers))
+	copy(failoversCopy, c.failovers)
+
+	eventsCopy := make([]EventEntry, len(c.events))
+	copy(eventsCopy, c.events)
 	c.mu.Unlock()
 
 	return &Snapshot{
 		Timestamp: time.Now(),
 		Agents:    agents,
 		History:   historyCopy,
-		Failovers: failovers,
+		Failovers: failoversCopy,
+		Events:    eventsCopy,
 	}, nil
 }
 

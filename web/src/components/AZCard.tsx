@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { AgentSnap } from '../types'
 
 interface Props {
@@ -10,10 +11,24 @@ function fmtBps(bps: number): string {
   return `${bps.toFixed(0)} B/s`
 }
 
+type ClaimState = 'idle' | 'loading' | 'ok' | 'error'
+
 export function AZCard({ agent: a }: Props) {
   const statusDot = a.rule_present && a.src_dst_disabled ? 'bg-green-400' : 'bg-red-400'
   const connPct = a.conntrack_max > 0 ? (a.conntrack_entries / a.conntrack_max) * 100 : 0
   const connBarColor = connPct > 70 ? 'bg-red-500' : connPct > 50 ? 'bg-yellow-400' : 'bg-green-500'
+  const [claimState, setClaimState] = useState<ClaimState>('idle')
+
+  async function handleClaim() {
+    setClaimState('loading')
+    try {
+      const resp = await fetch(`/agents/${encodeURIComponent(a.az)}/claim`, { method: 'POST' })
+      setClaimState(resp.ok ? 'ok' : 'error')
+    } catch {
+      setClaimState('error')
+    }
+    setTimeout(() => setClaimState('idle'), 3000)
+  }
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-3">
@@ -54,10 +69,28 @@ export function AZCard({ agent: a }: Props) {
         <div className="text-xs text-gray-400">Routes: {a.route_tables.join(', ')}</div>
       )}
 
-      <div className="flex gap-2 text-xs">
-        <Flag ok={a.rule_present} label="iptables" />
-        <Flag ok={a.src_dst_disabled} label="src/dst" />
-        <Flag ok={a.peer_up} label="peer" />
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2 text-xs">
+          <Flag ok={a.rule_present} label="iptables" />
+          <Flag ok={a.src_dst_disabled} label="src/dst" />
+          <Flag ok={a.peer_up} label="peer" />
+        </div>
+
+        <button
+          onClick={handleClaim}
+          disabled={claimState === 'loading'}
+          className={`text-xs px-2 py-1 rounded transition-colors ${
+            claimState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
+            claimState === 'ok'      ? 'bg-green-800 text-green-200' :
+            claimState === 'error'   ? 'bg-red-800 text-red-200' :
+            'bg-gray-700 text-gray-300 hover:bg-gray-600'
+          }`}
+        >
+          {claimState === 'loading' ? 'Claiming…' :
+           claimState === 'ok'      ? 'Claimed ✓' :
+           claimState === 'error'   ? 'Failed ✗' :
+           'Claim routes'}
+        </button>
       </div>
     </div>
   )

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { AgentSnap } from '../types'
 import { SpeedometerGauge } from './SpeedometerGauge'
 
@@ -14,6 +14,14 @@ export function AZCard({ agent: a }: Props) {
   const connBarColor = connPct > 70 ? 'bg-red-500' : connPct > 50 ? 'bg-yellow-400' : 'bg-green-500'
   const [claimState, setClaimState] = useState<BtnState>('idle')
   const [releaseState, setReleaseState] = useState<BtnState>('idle')
+  const [optimisticReleased, setOptimisticReleased] = useState(false)
+
+  // Clear optimistic state once WebSocket confirms routes are gone
+  useEffect(() => {
+    if ((a.route_tables?.length ?? 0) === 0) setOptimisticReleased(false)
+  }, [a.route_tables])
+
+  const hasRoutes = !optimisticReleased && (a.route_tables?.length ?? 0) > 0
 
   async function handleClaim() {
     setClaimState('loading')
@@ -30,7 +38,12 @@ export function AZCard({ agent: a }: Props) {
     setReleaseState('loading')
     try {
       const resp = await fetch(`/agents/${encodeURIComponent(a.az)}/release`, { method: 'POST' })
-      setReleaseState(resp.ok ? 'ok' : 'error')
+      if (resp.ok) {
+        setOptimisticReleased(true)
+        setReleaseState('ok')
+      } else {
+        setReleaseState('error')
+      }
     } catch {
       setReleaseState('error')
     }
@@ -72,7 +85,7 @@ export function AZCard({ agent: a }: Props) {
         <div className="text-xs text-gray-500 mt-0.5">{connPct.toFixed(1)}%</div>
       </div>
 
-      {a.route_tables?.length > 0 && (
+      {hasRoutes && (
         <div className="text-xs text-gray-400">Routes: {a.route_tables.join(', ')}</div>
       )}
 
@@ -84,7 +97,7 @@ export function AZCard({ agent: a }: Props) {
         </div>
 
         <div className="flex gap-2">
-          {a.route_tables?.length > 0 && (
+          {hasRoutes && (
             <button
               onClick={handleRelease}
               disabled={releaseState === 'loading'}
@@ -102,7 +115,7 @@ export function AZCard({ agent: a }: Props) {
             </button>
           )}
 
-          {!(a.route_tables?.length > 0) && (
+          {!hasRoutes && (
             <button
               onClick={handleClaim}
               disabled={claimState === 'loading'}

@@ -24,47 +24,80 @@ export function SummaryCards({ agents, failovers }: Props) {
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <Card label="TX" value={fmtBps(totalTx)}>
-        {totalMaxBw > 0 && <BwBar ratio={totalTx / totalMaxBw} color="bg-green-500" />}
+      <Card label="TX" value={fmtBps(totalTx)} accent="emerald" delay={0}>
+        {totalMaxBw > 0 && <BwBar ratio={totalTx / totalMaxBw} from="from-emerald-400" to="to-emerald-500" />}
       </Card>
-      <Card label="RX" value={fmtBps(totalRx)}>
-        {totalMaxBw > 0 && <BwBar ratio={totalRx / totalMaxBw} color="bg-blue-500" />}
+      <Card label="RX" value={fmtBps(totalRx)} accent="sky" delay={60}>
+        {totalMaxBw > 0 && <BwBar ratio={totalRx / totalMaxBw} from="from-sky-400" to="to-sky-500" />}
       </Card>
-      <Card label="Connections" value={totalConn.toLocaleString()}>
-        <div className="mt-2 h-1.5 bg-gray-800 rounded">
+      <Card label="Connections" value={totalConn.toLocaleString()} accent="violet" delay={120}>
+        <div className="mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded ${connRatio > 0.7 ? 'bg-red-500' : 'bg-green-500'}`}
+            className={`h-full rounded-full bg-gradient-to-r ${
+              connRatio > 0.7
+                ? 'from-rose-500 to-rose-400'
+                : connRatio > 0.5
+                ? 'from-amber-500 to-amber-400'
+                : 'from-violet-500 to-fuchsia-400'
+            } transition-all duration-700`}
             style={{ width: `${Math.min(connRatio * 100, 100).toFixed(1)}%` }}
           />
         </div>
-        <div className="text-xs text-gray-500 mt-1">{(connRatio * 100).toFixed(1)}% of limit</div>
+        <div className="text-[11px] text-gray-500 mt-1.5 num">{(connRatio * 100).toFixed(1)}% of limit</div>
       </Card>
-      <Card label="Failovers (24h)" value={String(fo24h)} />
+      <Card label="Failovers (24h)" value={String(fo24h)} accent={fo24h > 0 ? 'amber' : 'slate'} delay={180} />
     </div>
   )
 }
 
-function Card({ label, value, children }: { label: string; value: string; children?: ReactNode }) {
+const accentMap = {
+  emerald: 'from-emerald-400/70 to-emerald-600/0',
+  sky:     'from-sky-400/70 to-sky-600/0',
+  violet:  'from-violet-400/70 to-fuchsia-600/0',
+  amber:   'from-amber-400/70 to-amber-600/0',
+  slate:   'from-slate-400/40 to-slate-600/0',
+} as const
+
+function Card({
+  label,
+  value,
+  children,
+  accent,
+  delay,
+}: {
+  label: string
+  value: string
+  children?: ReactNode
+  accent: keyof typeof accentMap
+  delay: number
+}) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <div className="text-gray-400 text-xs uppercase tracking-widest mb-1">{label}</div>
-      <div className="text-2xl font-bold">{value}</div>
+    <div
+      className="panel panel-hover p-4 overflow-hidden animate-fade-up"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute -top-10 -right-10 h-28 w-28 rounded-full blur-3xl bg-gradient-to-br ${accentMap[accent]}`}
+      />
+      <div className="label-eyebrow mb-1.5">{label}</div>
+      <div className="text-3xl font-bold tracking-tight num">{value}</div>
       {children}
     </div>
   )
 }
 
-function BwBar({ ratio, color }: { ratio: number; color: string }) {
+function BwBar({ ratio, from, to }: { ratio: number; from: string; to: string }) {
   const pct = Math.min(ratio * 100, 100)
   return (
-    <div className="mt-2">
-      <div className="h-1.5 bg-gray-800 rounded">
+    <div className="mt-3">
+      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
         <div
-          className={`h-full rounded ${color} transition-all duration-500`}
+          className={`h-full rounded-full bg-gradient-to-r ${from} ${to} transition-all duration-700`}
           style={{ width: `${pct.toFixed(1)}%` }}
         />
       </div>
-      <div className="text-xs text-gray-500 mt-1">{pct.toFixed(1)}% of capacity</div>
+      <div className="text-[11px] text-gray-500 mt-1.5 num">{pct.toFixed(1)}% of capacity</div>
     </div>
   )
 }

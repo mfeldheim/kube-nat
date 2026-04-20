@@ -9,14 +9,13 @@ interface Props {
 type BtnState = 'idle' | 'loading' | 'ok' | 'error'
 
 export function AZCard({ agent: a }: Props) {
-  const statusDot = a.rule_present && a.src_dst_disabled ? 'bg-green-400' : 'bg-red-400'
+  const healthy = a.rule_present && a.src_dst_disabled
   const connRatio = a.conntrack_max > 0 ? a.conntrack_entries / a.conntrack_max : 0
-  const connColor = connRatio > 0.7 ? '#ef4444' : connRatio > 0.5 ? '#f59e0b' : '#f59e0b'
+  const connColor = connRatio > 0.7 ? '#ef4444' : connRatio > 0.5 ? '#f59e0b' : '#a78bfa'
   const [claimState, setClaimState] = useState<BtnState>('idle')
   const [releaseState, setReleaseState] = useState<BtnState>('idle')
   const [optimisticReleased, setOptimisticReleased] = useState(false)
 
-  // Clear optimistic state once WebSocket confirms routes are gone
   useEffect(() => {
     if ((a.route_tables?.length ?? 0) === 0) setOptimisticReleased(false)
   }, [a.route_tables])
@@ -57,33 +56,66 @@ export function AZCard({ agent: a }: Props) {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-3">
+    <div className="panel panel-hover p-4 space-y-4 animate-fade-up overflow-hidden">
+      {/* accent glow */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full blur-3xl ${
+          healthy
+            ? 'bg-emerald-500/10'
+            : 'bg-rose-500/15'
+        }`}
+      />
+
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${statusDot}`} />
-          <span className="font-semibold">{a.az}</span>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span
+              className={`absolute inline-flex h-full w-full rounded-full opacity-70 animate-pulse-dot ${
+                healthy ? 'bg-emerald-400' : 'bg-rose-400'
+              }`}
+            />
+            <span
+              className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
+                healthy ? 'bg-emerald-400' : 'bg-rose-400'
+              } ${healthy ? 'shadow-glow-green' : 'shadow-glow-red'}`}
+            />
+          </span>
+          <span className="font-semibold text-gray-100 tracking-tight truncate">{a.az}</span>
         </div>
         {a.spot_pending && (
-          <span className="text-xs bg-orange-800 text-orange-200 px-2 py-0.5 rounded">
-            SPOT ⚠
+          <span className="chip chip-warn">
+            <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+              <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+            </svg>
+            SPOT
           </span>
         )}
       </div>
 
-      <div className="text-xs text-gray-400">{a.instance_id || '—'}</div>
+      <div className="text-[11px] text-gray-500 font-mono truncate">{a.instance_id || '—'}</div>
 
-      <div className="flex gap-3 justify-center">
+      <div className="flex gap-3 justify-center py-1">
         <SpeedometerGauge value={a.tx_bps} max={a.max_bw_bps ?? 0} color="#34d399" label="TX" />
         <SpeedometerGauge value={a.rx_bps} max={a.max_bw_bps ?? 0} color="#60a5fa" label="RX" />
-        <SpeedometerGauge value={a.conntrack_entries} max={a.conntrack_max} color={connColor} label="conn" formatValue={fmtCount} />
+        <SpeedometerGauge
+          value={a.conntrack_entries}
+          max={a.conntrack_max}
+          color={connColor}
+          label="conn"
+          formatValue={fmtCount}
+        />
       </div>
 
       {hasRoutes && (
-        <div className="text-xs text-gray-400">Routes: {a.route_tables.join(', ')}</div>
+        <div className="text-[11px] text-gray-400">
+          <span className="label-eyebrow mr-2">Routes</span>
+          <span className="font-mono text-gray-300">{a.route_tables.join(', ')}</span>
+        </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2 text-xs">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex gap-1.5 text-xs">
           <Flag ok={a.rule_present} label="iptables" />
           <Flag ok={a.src_dst_disabled} label="src/dst" />
           <Flag ok={a.peer_up} label="peer" />
@@ -94,17 +126,24 @@ export function AZCard({ agent: a }: Props) {
             <button
               onClick={handleRelease}
               disabled={releaseState === 'loading'}
-              className={`text-xs px-2 py-1 rounded whitespace-nowrap transition-colors ${
-                releaseState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
-                releaseState === 'ok'      ? 'bg-green-800 text-green-200' :
-                releaseState === 'error'   ? 'bg-red-800 text-red-200' :
-                'bg-yellow-900 text-yellow-300 hover:bg-yellow-800'
+              className={`btn whitespace-nowrap ${
+                releaseState === 'loading' ? 'border-white/10 bg-white/5 text-gray-400 cursor-wait' :
+                releaseState === 'ok'      ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' :
+                releaseState === 'error'   ? 'border-rose-400/30 bg-rose-400/10 text-rose-300' :
+                'btn-warn'
               }`}
             >
-              {releaseState === 'loading' ? 'Releasing…' :
-               releaseState === 'ok'      ? 'Released ✓' :
-               releaseState === 'error'   ? 'Failed ✗' :
-               'Fallback to NAT'}
+              {releaseState === 'loading' ? (
+                <>
+                  <Spinner /> Releasing…
+                </>
+              ) : releaseState === 'ok' ? (
+                'Released ✓'
+              ) : releaseState === 'error' ? (
+                'Failed ✗'
+              ) : (
+                'Fallback to NAT'
+              )}
             </button>
           )}
 
@@ -112,17 +151,24 @@ export function AZCard({ agent: a }: Props) {
             <button
               onClick={handleClaim}
               disabled={claimState === 'loading'}
-              className={`text-xs px-2 py-1 rounded whitespace-nowrap transition-colors ${
-                claimState === 'loading' ? 'bg-gray-700 text-gray-400 cursor-wait' :
-                claimState === 'ok'      ? 'bg-green-800 text-green-200' :
-                claimState === 'error'   ? 'bg-red-800 text-red-200' :
-                'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              className={`btn whitespace-nowrap ${
+                claimState === 'loading' ? 'border-white/10 bg-white/5 text-gray-400 cursor-wait' :
+                claimState === 'ok'      ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' :
+                claimState === 'error'   ? 'border-rose-400/30 bg-rose-400/10 text-rose-300' :
+                'btn-ghost'
               }`}
             >
-              {claimState === 'loading' ? 'Claiming…' :
-               claimState === 'ok'      ? 'Claimed ✓' :
-               claimState === 'error'   ? 'Failed ✗' :
-               'Claim routes'}
+              {claimState === 'loading' ? (
+                <>
+                  <Spinner /> Claiming…
+                </>
+              ) : claimState === 'ok' ? (
+                'Claimed ✓'
+              ) : claimState === 'error' ? (
+                'Failed ✗'
+              ) : (
+                'Claim routes'
+              )}
             </button>
           )}
         </div>
@@ -133,8 +179,20 @@ export function AZCard({ agent: a }: Props) {
 
 function Flag({ ok, label }: { ok: boolean; label: string }) {
   return (
-    <span className={`px-1.5 py-0.5 rounded ${ok ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
+    <span className={`chip ${ok ? 'chip-ok' : 'chip-bad'}`}>
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-400 shadow-glow-green' : 'bg-rose-400 shadow-glow-red'}`}
+      />
       {label}
     </span>
+  )
+}
+
+function Spinner() {
+  return (
+    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" aria-hidden>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" opacity="0.25" />
+      <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" fill="none" strokeLinecap="round" />
+    </svg>
   )
 }

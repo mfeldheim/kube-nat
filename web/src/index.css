@@ -2,6 +2,110 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
 body {
-  @apply bg-gray-950 text-gray-100 font-mono;
+  @apply text-gray-100 font-sans antialiased;
+  background-color: #05080f;
+  background-image:
+    radial-gradient(1200px 700px at 15% -10%, rgba(59, 99, 255, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(52, 211, 153, 0.10), transparent 55%),
+    radial-gradient(700px 400px at 50% 110%, rgba(96, 165, 250, 0.10), transparent 60%);
+  background-attachment: fixed;
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+/* subtle grid backdrop */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 50% 0%, black 40%, transparent 85%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 0%, black 40%, transparent 85%);
+  z-index: 0;
+}
+
+#root { position: relative; z-index: 1; }
+
+@layer components {
+  /* Glassy panel surface used across cards/panels */
+  .panel {
+    @apply relative rounded-2xl border border-white/5 bg-white/[0.02] backdrop-blur-xl shadow-card;
+    background-image: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.0));
+  }
+  .panel::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(140deg, rgba(96,165,250,0.35), rgba(255,255,255,0.04) 30%, rgba(52,211,153,0.20) 100%);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+    opacity: 0.6;
+  }
+  .panel-hover {
+    transition: transform 300ms ease, box-shadow 300ms ease, border-color 300ms ease;
+  }
+  .panel-hover:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      0 1px 0 0 rgba(255,255,255,0.06) inset,
+      0 28px 60px -24px rgba(0,0,0,0.75),
+      0 0 0 1px rgba(96,165,250,0.15);
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide;
+  }
+  .chip-ok    { @apply border-emerald-400/30 bg-emerald-400/10 text-emerald-300; }
+  .chip-warn  { @apply border-amber-400/30  bg-amber-400/10  text-amber-300;  }
+  .chip-bad   { @apply border-rose-400/30   bg-rose-400/10   text-rose-300;   }
+  .chip-info  { @apply border-sky-400/30    bg-sky-400/10    text-sky-300;    }
+  .chip-muted { @apply border-white/10      bg-white/5       text-gray-300;   }
+
+  .label-eyebrow {
+    @apply text-[10px] uppercase tracking-[0.18em] text-gray-400 font-medium;
+  }
+
+  .num { font-variant-numeric: tabular-nums; }
+
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all;
+  }
+  .btn-primary {
+    @apply border-sky-400/30 bg-gradient-to-b from-sky-500/20 to-sky-600/10 text-sky-200 hover:from-sky-500/30 hover:to-sky-600/20 hover:border-sky-400/50;
+  }
+  .btn-warn {
+    @apply border-amber-400/30 bg-gradient-to-b from-amber-500/20 to-amber-600/10 text-amber-200 hover:from-amber-500/30 hover:to-amber-600/20 hover:border-amber-400/50;
+  }
+  .btn-ghost {
+    @apply border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06] hover:border-white/20;
+  }
+
+  .divider-glow {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(96,165,250,0.45), rgba(52,211,153,0.35), transparent);
+    background-size: 200% 100%;
+  }
+}
+
+/* Recharts tooltip/axis tweaks */
+.recharts-default-tooltip {
+  border-radius: 10px !important;
 }

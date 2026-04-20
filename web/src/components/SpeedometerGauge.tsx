@@ -21,15 +21,34 @@ export function SpeedometerGauge({ value, max, color, label, formatValue = fmtBp
   const arcLen = Math.PI * 28
   const filled = pct * arcLen
   const gap = arcLen - filled
+  const gradId = `g-${label}-${color.replace('#', '')}`
 
   return (
     <div className="flex flex-col items-center">
-      <svg width="72" height="44" viewBox="0 0 72 44" aria-label={`${label} ${(pct * 100).toFixed(0)}%`}>
+      <svg
+        width="78"
+        height="48"
+        viewBox="0 0 72 44"
+        aria-label={`${label} ${(pct * 100).toFixed(0)}%`}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor={color} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={color} stopOpacity="1" />
+          </linearGradient>
+          <filter id={`${gradId}-glow`} x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="1.4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
         {/* track */}
         <path
           d="M8,38 A28,28 0 0,1 64,38"
           fill="none"
-          stroke="#1f2937"
+          stroke="rgba(255,255,255,0.08)"
           strokeWidth="5"
           strokeLinecap="round"
         />
@@ -37,25 +56,28 @@ export function SpeedometerGauge({ value, max, color, label, formatValue = fmtBp
         <path
           d="M8,38 A28,28 0 0,1 64,38"
           fill="none"
-          stroke={color}
+          stroke={`url(#${gradId})`}
           strokeWidth="5"
           strokeLinecap="round"
           strokeDasharray={`${filled.toFixed(2)} ${gap.toFixed(2)}`}
+          filter={`url(#${gradId}-glow)`}
+          style={{ transition: 'stroke-dasharray 700ms ease' }}
         />
         {/* percentage */}
         <text
           x="36"
-          y="31"
+          y="32"
           textAnchor="middle"
           fontSize="10"
-          fill="#9ca3af"
-          fontFamily="monospace"
+          fill="#cbd5e1"
+          fontFamily="'JetBrains Mono', monospace"
+          fontWeight="600"
         >
           {(pct * 100).toFixed(0)}%
         </text>
       </svg>
-      <div className="text-xs text-gray-400 -mt-1">{label}</div>
-      <div className="text-xs text-gray-100 font-bold">{formatValue(value)}</div>
+      <div className="label-eyebrow -mt-1">{label}</div>
+      <div className="text-xs text-gray-100 font-semibold num mt-0.5">{formatValue(value)}</div>
     </div>
   )
 }

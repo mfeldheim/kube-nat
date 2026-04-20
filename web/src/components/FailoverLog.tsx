@@ -4,33 +4,52 @@ interface Props {
   failovers: FailoverEvent[]
 }
 
+const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZoneName: 'short',
+})
+
+const fullFmt = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'full',
+  timeStyle: 'long',
+})
+
 export function FailoverLog({ failovers }: Props) {
   const sorted = [...failovers].sort((a, b) => b.ts - a.ts).slice(0, 20)
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <div className="text-gray-400 text-xs uppercase tracking-widest mb-3">
-        Failover events
-      </div>
+    <div className="panel p-5 animate-fade-up">
+      <div className="label-eyebrow mb-3">Failover events</div>
       {sorted.length === 0 ? (
-        <div className="text-gray-600 text-sm">No failover events.</div>
+        <div className="text-gray-500 text-sm py-8 text-center border border-dashed border-white/10 rounded-xl">
+          No failover events.
+        </div>
       ) : (
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-gray-500 text-xs border-b border-gray-800">
-              <th className="text-left py-1">Time</th>
-              <th className="text-left py-1">From AZ</th>
-              <th className="text-left py-1">Covered by</th>
+            <tr className="text-gray-500 text-[10px] uppercase tracking-[0.18em]">
+              <th className="text-left font-medium py-2 px-2">Time</th>
+              <th className="text-left font-medium py-2 px-2">From AZ</th>
+              <th className="text-left font-medium py-2 px-2">Covered by</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((f, i) => (
-              <tr key={i} className="border-b border-gray-800/50">
-                <td className="py-1 text-gray-400">
-                  {new Date(f.ts * 1000).toLocaleString()}
+              <tr key={i} className="border-t border-white/[0.04]">
+                <td
+                  className="py-2 px-2 text-gray-400 num"
+                  title={fullFmt.format(new Date(f.ts * 1000))}
+                >
+                  {dateTimeFmt.format(new Date(f.ts * 1000))}
                 </td>
-                <td className="py-1">{f.from_az}</td>
-                <td className="py-1 text-green-400">{f.to_az || '—'}</td>
+                <td className="py-2 px-2 text-gray-200">{f.from_az}</td>
+                <td className="py-2 px-2 text-emerald-300">{f.to_az || '—'}</td>
               </tr>
             ))}
           </tbody>

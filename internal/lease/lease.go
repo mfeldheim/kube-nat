@@ -102,6 +102,10 @@ func (m *Manager) Acquire(ctx context.Context, az, holderID string) (bool, error
 	_, err = m.client.CoordinationV1().Leases(m.namespace).
 		Update(ctx, existing, metav1.UpdateOptions{})
 	if err != nil {
+		if errors.IsConflict(err) {
+			// Another agent updated the lease between our Get and Update — clean loss.
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil

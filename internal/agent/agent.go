@@ -150,7 +150,7 @@ func Run(cfg *config.Config) error {
 		peerMu      sync.Mutex
 		peerClients []*peer.Client
 	)
-	go startPeerWatcher(ctx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, &peerMu, &peerClients)
+	go startPeerWatcher(ctx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, rec, &peerMu, &peerClients)
 
 	// 13. Spot watcher — proactive step-down on interruption notice
 	spotWatcher := spot.NewWatcher("", time.Second, func() {
@@ -210,6 +210,20 @@ func Run(cfg *config.Config) error {
 				}
 				if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
 					logger.Printf("lease renew error: %v", err)
+				}
+				// Detect when original owners reclaim their route tables.
+				if vacated, err := rec.ReconcileForeign(ctx); err != nil {
+					logger.Printf("reconcile foreign error: %v", err)
+				} else {
+					for _, rtbID := range vacated {
+						reg.RouteTableOwned.WithLabelValues(rtbID).Set(0)
+					}
+				}
+				// Keep our failover leases alive so no other agent races us.
+				for _, foreignAZ := range rec.ForeignAZs() {
+					if err := leaseMgr.Renew(ctx, foreignAZ, podName); err != nil {
+						logger.Printf("failover lease renew error az=%s: %v", foreignAZ, err)
+					}
 				}
 				updateMetrics(reg, meta, natMgr, rec)
 			}
@@ -285,7 +299,7 @@ func Run(cfg *config.Config) error {
 func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kubernetes.Interface,
 	leaseMgr *lease.Manager, ec2Client kubenataws.EC2Client,
 	meta *kubenataws.InstanceMetadata, reg *metrics.Registry, logger *log.Logger,
-	mu *sync.Mutex, clients *[]*peer.Client) {
+	rec *reconciler.Reconciler, mu *sync.Mutex, clients *[]*peer.Client) {
 
 	var azMu sync.Mutex
 	connectedAZs := make(map[string]bool)
@@ -319,6 +333,10 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 
 			logger.Printf("discovered peer az=%s instance=%s addr=%s", peerAZ, peerInstanceID, peerAddr)
 			reg.PeerStatus.WithLabelValues(peerAZ, peerInstanceID).Set(1)
+			// Pre-initialize failover counters for both directions so they show 0 in /metrics
+			// from the moment the peer is discovered, rather than only after the first event.
+			reg.FailoverTotal.WithLabelValues(peerAZ, meta.AZ)
+			reg.FailoverTotal.WithLabelValues(meta.AZ, peerAZ)
 
 			c := peer.NewClient(peerAZ, peer.ClientConfig{
 				ProbeInterval: cfg.ProbeInterval,
@@ -331,14 +349,14 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 					azMu.Lock()
 					delete(connectedAZs, az)
 					azMu.Unlock()
-					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
+					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
 				},
 				OnStepDown: func(az string) {
 					logger.Printf("peer %s stepping down — taking over", az)
 					azMu.Lock()
 					delete(connectedAZs, az)
 					azMu.Unlock()
-					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az)
+					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
 				},
 			})
 			mu.Lock()
@@ -364,7 +382,7 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 
 func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 	ec2Client kubenataws.EC2Client, meta *kubenataws.InstanceMetadata,
-	reg *metrics.Registry, logger *log.Logger, deadAZ string) {
+	reg *metrics.Registry, logger *log.Logger, deadAZ string, rec *reconciler.Reconciler) {
 
 	podName := podNameOrInstanceID(meta.InstanceID)
 	acquired, err := leaseMgr.Acquire(ctx, deadAZ, podName)
@@ -383,6 +401,7 @@ func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 		return
 	}
 
+	var claimed []string
 	for _, rt := range tables {
 		if cfg.Mode == "manual" {
 			logger.Printf("[MANUAL] aws ec2 replace-route --route-table-id %s --destination-cidr-block 0.0.0.0/0 --instance-id %s --region %s",
@@ -394,7 +413,12 @@ func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 		} else {
 			logger.Printf("takeover %s: claimed %s", deadAZ, rt.ID)
 			reg.RouteTableOwned.WithLabelValues(rt.ID).Set(1)
+			claimed = append(claimed, rt.ID)
 		}
+	}
+
+	if len(claimed) > 0 {
+		rec.AddForeignTables(deadAZ, claimed)
 	}
 
 	reg.FailoverTotal.WithLabelValues(deadAZ, meta.AZ).Inc()

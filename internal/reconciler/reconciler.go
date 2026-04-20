@@ -27,10 +27,11 @@ type Reconciler struct {
 	cfg    Config
 	logger *log.Logger
 
-	mu            sync.RWMutex
-	ownedTables   []string          // RTB IDs this agent currently owns
-	originalNatGW map[string]string // rtbID → nat gateway ID captured at claim time
-	rtbVpcID      map[string]string // rtbID → VPC ID (for fallback nat GW lookup)
+	mu                 sync.RWMutex
+	ownedTables        []string          // RTB IDs this agent currently owns (own AZ)
+	foreignOwnedTables map[string]string // rtbID → deadAZ for tables claimed during failover
+	originalNatGW      map[string]string // rtbID → nat gateway ID captured at claim time
+	rtbVpcID           map[string]string // rtbID → VPC ID (for fallback nat GW lookup)
 }
 
 func New(cfg Config) *Reconciler {
@@ -39,10 +40,11 @@ func New(cfg Config) *Reconciler {
 		w = os.Stderr
 	}
 	return &Reconciler{
-		cfg:           cfg,
-		logger:        log.New(w, "[reconciler] ", log.LstdFlags),
-		originalNatGW: make(map[string]string),
-		rtbVpcID:      make(map[string]string),
+		cfg:                cfg,
+		logger:             log.New(w, "[reconciler] ", log.LstdFlags),
+		foreignOwnedTables: make(map[string]string),
+		originalNatGW:      make(map[string]string),
+		rtbVpcID:           make(map[string]string),
 	}
 }
 
@@ -54,6 +56,75 @@ func (r *Reconciler) OwnedTables() []string {
 	out := make([]string, len(r.ownedTables))
 	copy(out, r.ownedTables)
 	return out
+}
+
+// AddForeignTables registers route tables claimed on behalf of a dead AZ.
+// These are monitored by ReconcileForeign to detect when the original owner recovers.
+func (r *Reconciler) AddForeignTables(deadAZ string, rtbIDs []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range rtbIDs {
+		r.foreignOwnedTables[id] = deadAZ
+	}
+}
+
+// ForeignAZs returns the set of AZs whose route tables this agent is currently covering.
+func (r *Reconciler) ForeignAZs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	azSet := make(map[string]bool)
+	for _, az := range r.foreignOwnedTables {
+		azSet[az] = true
+	}
+	result := make([]string, 0, len(azSet))
+	for az := range azSet {
+		result = append(result, az)
+	}
+	return result
+}
+
+// ReconcileForeign checks route tables claimed during failover and detects when
+// the original owner has reclaimed them. Returns RTB IDs that are no longer
+// owned by this agent so callers can clear the ownership gauge.
+func (r *Reconciler) ReconcileForeign(ctx context.Context) ([]string, error) {
+	r.mu.RLock()
+	foreign := make(map[string]string, len(r.foreignOwnedTables))
+	for k, v := range r.foreignOwnedTables {
+		foreign[k] = v
+	}
+	r.mu.RUnlock()
+
+	if len(foreign) == 0 {
+		return nil, nil
+	}
+
+	// Collect unique AZs to minimise DiscoverRouteTables calls.
+	azTables := make(map[string][]string) // az → []rtbID we think we own there
+	for rtbID, az := range foreign {
+		azTables[az] = append(azTables[az], rtbID)
+	}
+
+	var vacated []string
+	for az := range azTables {
+		tables, err := r.cfg.EC2Client.DiscoverRouteTables(ctx, az)
+		if err != nil {
+			r.logger.Printf("ReconcileForeign: discover route tables az=%s: %v", az, err)
+			continue
+		}
+		for _, rt := range tables {
+			if _, owned := foreign[rt.ID]; !owned {
+				continue
+			}
+			if rt.InstanceID != r.cfg.InstanceID {
+				r.logger.Printf("ReconcileForeign: route table %s in az=%s reclaimed by %q — releasing ownership", rt.ID, az, rt.InstanceID)
+				vacated = append(vacated, rt.ID)
+				r.mu.Lock()
+				delete(r.foreignOwnedTables, rt.ID)
+				r.mu.Unlock()
+			}
+		}
+	}
+	return vacated, nil
 }
 
 // Reconcile brings the node into the desired NAT state.

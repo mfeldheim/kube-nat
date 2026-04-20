@@ -23,6 +23,7 @@ type EventEntry struct {
 type AgentSnap struct {
 	AZ               string   `json:"az"`
 	InstanceID       string   `json:"instance_id"`
+	InstanceType     string   `json:"instance_type"`     // e.g. "m5.large"
 	TxBytesPerSec    float64  `json:"tx_bps"`
 	RxBytesPerSec    float64  `json:"rx_bps"`
 	ConntrackEntries float64  `json:"conntrack_entries"`
@@ -33,8 +34,11 @@ type AgentSnap struct {
 	SpotPending      bool     `json:"spot_pending"`
 	RulePresent      bool     `json:"rule_present"`
 	SrcDstDisabled   bool     `json:"src_dst_disabled"`
-	LastFailoverTS  float64  `json:"last_failover_ts"` // unix seconds, 0 if never
-	MaxBandwidthBps float64  `json:"max_bw_bps"`       // peak network bandwidth in bytes/s
+	LastFailoverTS   float64  `json:"last_failover_ts"`  // unix seconds, 0 if never
+	MaxBandwidthBps  float64  `json:"max_bw_bps"`        // peak network bandwidth in bytes/s
+	CPUUsageRatio    float64  `json:"cpu_usage_ratio"`   // 0–1
+	MemUsedBytes     float64  `json:"mem_used_bytes"`
+	MemTotalBytes    float64  `json:"mem_total_bytes"`
 }
 
 // HistoryPoint is one bandwidth sample for the sparkline.

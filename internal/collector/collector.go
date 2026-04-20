@@ -250,6 +250,20 @@ func (c *Collector) buildSnap(families map[string]*dto.MetricFamily) *AgentSnap 
 	snap.SrcDstDisabled = gaugeVal(families, "kube_nat_src_dst_check_disabled") >= 1
 	snap.SpotPending = gaugeVal(families, "kube_nat_spot_interruption_pending") >= 1
 	snap.MaxBandwidthBps = gaugeVal(families, "kube_nat_max_bandwidth_bps")
+	snap.CPUUsageRatio = gaugeVal(families, "kube_nat_cpu_usage_ratio")
+	snap.MemUsedBytes = gaugeVal(families, "kube_nat_memory_used_bytes")
+	snap.MemTotalBytes = gaugeVal(families, "kube_nat_memory_total_bytes")
+
+	// Extract instance_type from the info gauge label.
+	if mf, ok := families["kube_nat_instance_info"]; ok {
+		for _, m := range mf.Metric {
+			for _, lp := range m.Label {
+				if lp.GetName() == "instance_type" {
+					snap.InstanceType = lp.GetValue()
+				}
+			}
+		}
+	}
 
 	// Collect owned route tables (all rtb_id labels with value >= 1).
 	if mf, ok := families["kube_nat_route_table_owned"]; ok {

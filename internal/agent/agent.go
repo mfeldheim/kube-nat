@@ -92,6 +92,9 @@ func Run(cfg *config.Config) error {
 		logger.Printf("instance type=%s peak bandwidth=%.0f bps (%.1f Gbps)", meta.InstanceType, maxBps, maxBps/1e9)
 	}
 
+	// Expose instance type as a label so the dashboard can display it.
+	reg.InstanceInfo.WithLabelValues(meta.InstanceType).Set(1)
+
 	// 6. Kubernetes client (in-cluster)
 	logger.Printf("initializing Kubernetes in-cluster client")
 	k8sCfg, err := rest.InClusterConfig()
@@ -230,17 +233,22 @@ func Run(cfg *config.Config) error {
 		}
 	}()
 
-	// 17. Bandwidth sampler — dedicated 1s ticker so bandwidth is independent of reconcile.
-	// Reads iptables FORWARD byte counters and maintains an EMA-smoothed rate gauge.
+	// 17. Bandwidth + resource sampler — 1s ticker for bandwidth, CPU, and memory.
 	go func() {
-		type bwState struct {
+		type samplerState struct {
 			bytesTX uint64
 			bytesRX uint64
 			txEMA   float64
 			rxEMA   float64
+			cpuEMA  float64
 			ts      time.Time
+			cpu     iface.CPUStat
 		}
-		var prev bwState
+		var prev samplerState
+		// Seed CPU baseline so the first delta is valid.
+		if c, err := iface.ReadCPUStat(); err == nil {
+			prev.cpu = c
+		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
@@ -251,24 +259,43 @@ func Run(cfg *config.Config) error {
 				tx, rx, err := natMgr.GetForwardBytes()
 				if err != nil {
 					logger.Printf("bandwidth read error: %v", err)
-					continue
 				}
+				curCPU, cpuErr := iface.ReadCPUStat()
 				if !prev.ts.IsZero() {
 					elapsed := now.Sub(prev.ts).Seconds()
-					rawTx := float64(tx-prev.bytesTX) / elapsed
-					rawRx := float64(rx-prev.bytesRX) / elapsed
 					const halfLife = 20.0
 					alpha := 1 - math.Exp(-elapsed/halfLife)
-					txEMA := alpha*rawTx + (1-alpha)*prev.txEMA
-					rxEMA := alpha*rawRx + (1-alpha)*prev.rxEMA
-					reg.TxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(txEMA)
-					reg.RxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(rxEMA)
-					prev.txEMA = txEMA
-					prev.rxEMA = rxEMA
+					if err == nil {
+						rawTx := float64(tx-prev.bytesTX) / elapsed
+						rawRx := float64(rx-prev.bytesRX) / elapsed
+						txEMA := alpha*rawTx + (1-alpha)*prev.txEMA
+						rxEMA := alpha*rawRx + (1-alpha)*prev.rxEMA
+						reg.TxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(txEMA)
+						reg.RxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(rxEMA)
+						prev.txEMA = txEMA
+						prev.rxEMA = rxEMA
+					}
+					if cpuErr == nil {
+						rawCPU := iface.CPURatio(prev.cpu, curCPU)
+						cpuEMA := alpha*rawCPU + (1-alpha)*prev.cpuEMA
+						reg.CPUUsageRatio.Set(cpuEMA)
+						prev.cpuEMA = cpuEMA
+					}
 				}
-				prev.bytesTX = tx
-				prev.bytesRX = rx
+				if err == nil {
+					prev.bytesTX = tx
+					prev.bytesRX = rx
+				}
+				if cpuErr == nil {
+					prev.cpu = curCPU
+				}
 				prev.ts = now
+
+				// Memory is instantaneous — read every tick.
+				if mem, err := iface.ReadMemStat(); err == nil {
+					reg.MemUsedBytes.Set(float64(mem.UsedBytes()))
+					reg.MemTotalBytes.Set(float64(mem.TotalBytes))
+				}
 			}
 		}
 	}()

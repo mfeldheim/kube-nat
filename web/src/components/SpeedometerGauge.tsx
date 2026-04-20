@@ -1,9 +1,12 @@
+import { useFlash } from '../hooks/useFlash'
+
 interface Props {
   value: number
   max: number
-  color: string  // e.g. "#34d399" or "#60a5fa"
-  label: string  // "TX", "RX", "conn"
+  color: string
+  label: string
   formatValue?: (v: number) => string
+  large?: boolean
 }
 
 function fmtBps(bps: number): string {
@@ -16,18 +19,21 @@ function fmtBps(bps: number): string {
 // Half-arc (semicircle) SVG speedometer gauge.
 // Arc: M8,38 A28,28 0 0,1 64,38 — centre (36,38), radius 28, sweeps upward left→right.
 // Arc length = π * 28 ≈ 87.96
-export function SpeedometerGauge({ value, max, color, label, formatValue = fmtBps }: Props) {
+export function SpeedometerGauge({ value, max, color, label, formatValue = fmtBps, large = false }: Props) {
   const pct = max > 0 ? Math.min(value / max, 1) : 0
   const arcLen = Math.PI * 28
   const filled = pct * arcLen
   const gap = arcLen - filled
   const gradId = `g-${label}-${color.replace('#', '')}`
+  const w = large ? 108 : 78
+  const h = large ? 66  : 48
+  const flashing = useFlash(formatValue(value))
 
   return (
     <div className="flex flex-col items-center">
       <svg
-        width="78"
-        height="48"
+        width={w}
+        height={h}
         viewBox="0 0 72 44"
         aria-label={`${label} ${(pct * 100).toFixed(0)}%`}
       >
@@ -77,7 +83,12 @@ export function SpeedometerGauge({ value, max, color, label, formatValue = fmtBp
         </text>
       </svg>
       <div className="label-eyebrow -mt-1">{label}</div>
-      <div className="text-xs text-gray-100 font-semibold num mt-0.5">{formatValue(value)}</div>
+      <div
+        key={flashing ? 'flash' : 'still'}
+        className={`text-xs text-gray-100 font-semibold num mt-0.5 ${flashing ? 'animate-value-flash' : ''}`}
+      >
+        {formatValue(value)}
+      </div>
     </div>
   )
 }

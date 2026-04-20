@@ -30,6 +30,12 @@ type Registry struct {
 	TxBytesPerSec *prometheus.GaugeVec
 	RxBytesPerSec *prometheus.GaugeVec
 
+	// Node resource metrics.
+	InstanceInfo  *prometheus.GaugeVec // label: instance_type; value always 1
+	CPUUsageRatio prometheus.Gauge
+	MemUsedBytes  prometheus.Gauge
+	MemTotalBytes prometheus.Gauge
+
 	reg *prometheus.Registry
 }
 
@@ -93,6 +99,22 @@ func NewRegistry() *Registry {
 		Name: "kube_nat_rx_bps",
 		Help: "EMA-smoothed RX throughput in bytes/s, updated every second",
 	}, []string{"az", "instance_id"})
+	m.InstanceInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kube_nat_instance_info",
+		Help: "Instance metadata; value is always 1, use labels for info",
+	}, []string{"instance_type"})
+	m.CPUUsageRatio = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_nat_cpu_usage_ratio",
+		Help: "Node CPU usage ratio (0–1), EMA-smoothed over 1s samples",
+	})
+	m.MemUsedBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_nat_memory_used_bytes",
+		Help: "Node memory used (total − available) in bytes",
+	})
+	m.MemTotalBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_nat_memory_total_bytes",
+		Help: "Node memory total in bytes",
+	})
 
 	r.MustRegister(
 		m.BytesTX, m.BytesRX, m.PacketsTX, m.PacketsRX,
@@ -101,6 +123,7 @@ func NewRegistry() *Registry {
 		m.PeerStatus, m.FailoverTotal, m.LastFailover,
 		m.SpotInterruptionPending, m.MaxBandwidthBps,
 		m.TxBytesPerSec, m.RxBytesPerSec,
+		m.InstanceInfo, m.CPUUsageRatio, m.MemUsedBytes, m.MemTotalBytes,
 	)
 	return m
 }

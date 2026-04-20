@@ -60,6 +60,10 @@ export default {
           '0%,100%': { backgroundPosition: '0% 50%' },
           '50%':     { backgroundPosition: '100% 50%' },
         },
+        valueFlash: {
+          '0%':   { color: '#93c5fd', textShadow: '0 0 8px rgba(147,197,253,0.7)' },
+          '100%': { color: 'inherit', textShadow: 'none' },
+        },
       },
       animation: {
         'fade-up': 'fadeUp 0.5s ease-out both',
@@ -67,6 +71,7 @@ export default {
         'pulse-dot': 'pulseDot 2s ease-in-out infinite',
         shimmer: 'shimmer 2.4s linear infinite',
         'gradient-shift': 'gradientShift 8s ease-in-out infinite',
+        'value-flash': 'valueFlash 0.5s ease-out both',
       },
     },
   },

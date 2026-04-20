@@ -1,6 +1,7 @@
 export interface AgentSnap {
   az: string
   instance_id: string
+  instance_type: string     // e.g. "m5.large"
   tx_bps: number
   rx_bps: number
   conntrack_entries: number
@@ -13,6 +14,9 @@ export interface AgentSnap {
   src_dst_disabled: boolean
   last_failover_ts: number  // unix seconds, 0 if never
   max_bw_bps: number        // peak network bandwidth in bytes/s
+  cpu_usage_ratio: number   // 0–1
+  mem_used_bytes: number
+  mem_total_bytes: number
 }
 
 export interface HistoryPoint {

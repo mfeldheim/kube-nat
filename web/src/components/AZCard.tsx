@@ -62,7 +62,7 @@ export function AZCard({ agent: a }: Props) {
   }
 
   return (
-    <div className="panel panel-hover px-4 pb-4 pt-3 space-y-3 animate-fade-up overflow-hidden">
+    <div className="panel panel-hover px-3 pb-3 pt-2 space-y-2 animate-fade-up overflow-hidden">
       {/* accent glow */}
       <div
         aria-hidden
@@ -78,7 +78,7 @@ export function AZCard({ agent: a }: Props) {
             <span className={`absolute inline-flex h-full w-full rounded-full opacity-70 animate-pulse-dot ${healthy ? 'bg-emerald-400' : 'bg-rose-400'}`} />
             <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${healthy ? 'bg-emerald-400 shadow-glow-green' : 'bg-rose-400 shadow-glow-red'}`} />
           </span>
-          <span className="font-bold text-3xl text-gray-100 tracking-tight">{a.az}</span>
+          <span className="font-bold text-2xl text-gray-100 tracking-tight">{a.az}</span>
         </div>
         {a.spot_pending && (
           <span className="chip chip-warn">
@@ -103,15 +103,15 @@ export function AZCard({ agent: a }: Props) {
         )}
       </div>
 
-      {/* ── Row 3: Speed gauges (large) ── */}
-      <div className="flex gap-4 justify-center py-1">
-        <SpeedometerGauge value={a.tx_bps}          max={a.max_bw_bps ?? 0} color="#34d399" label="TX"   large />
-        <SpeedometerGauge value={a.rx_bps}          max={a.max_bw_bps ?? 0} color="#60a5fa" label="RX"   large />
-        <SpeedometerGauge value={a.conntrack_entries} max={a.conntrack_max}  color={connColor} label="conn" large formatValue={fmtCount} />
+      {/* ── Row 3: Speed gauges ── */}
+      <div className="flex gap-3 justify-center py-0.5">
+        <SpeedometerGauge value={a.tx_bps}          max={a.max_bw_bps ?? 0} color="#34d399" label="TX"   />
+        <SpeedometerGauge value={a.rx_bps}          max={a.max_bw_bps ?? 0} color="#60a5fa" label="RX"   />
+        <SpeedometerGauge value={a.conntrack_entries} max={a.conntrack_max}  color={connColor} label="conn" formatValue={fmtCount} />
       </div>
 
       {/* ── Row 4: Resource stats ── */}
-      <div className="space-y-2 pt-0.5">
+      <div className="space-y-1.5 pt-0.5">
         <StatBar
           icon={<IconMemory />}
           label="mem"

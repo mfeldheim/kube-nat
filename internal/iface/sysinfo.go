@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	hostProcStat    = "/host/proc/stat"
-	hostProcMeminfo = "/host/proc/meminfo"
+	hostProcStat    = "/proc/stat"
+	hostProcMeminfo = "/proc/meminfo"
 )
 
 // CPUStat holds raw cumulative CPU ticks from /proc/stat.

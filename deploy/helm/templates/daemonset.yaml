@@ -83,18 +83,12 @@ spec:
             exec:
               command: ["/bin/sleep", "2"]
         volumeMounts:
-        - name: proc
-          mountPath: /host/proc
-          readOnly: true
         - name: proc-sys
           mountPath: /host/proc/sys
         - name: lib-modules
           mountPath: /lib/modules
           readOnly: true
       volumes:
-      - name: proc
-        hostPath:
-          path: /proc
       - name: proc-sys
         hostPath:
           path: /proc/sys

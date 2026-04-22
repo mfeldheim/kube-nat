@@ -2,8 +2,6 @@ package nat
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
 )
@@ -14,14 +12,6 @@ type Manager interface {
 	MasqueradeExists(iface string) (bool, error)
 	EnableIPForward() error
 	SetConntrackMax(max int) error
-	// EnsureForwardCounters inserts two byte-counting rules in filter FORWARD to
-	// separately track TX (original/upload direction) and RX (reply/download direction).
-	// These rules use conntrack direction matching, so they correctly differentiate traffic
-	// even on a single-NIC NAT instance where eth0 handles both directions.
-	EnsureForwardCounters() error
-	// GetForwardBytes returns the accumulated byte totals from the forward counting rules.
-	// TX = original direction (client→internet), RX = reply direction (internet→client).
-	GetForwardBytes() (tx uint64, rx uint64, err error)
 }
 
 type iptablesManager struct {
@@ -68,58 +58,3 @@ func (m *iptablesManager) SetConntrackMax(max int) error {
 	return writeSysctl("/host/proc/sys/net/netfilter/nf_conntrack_max", fmt.Sprintf("%d", max))
 }
 
-const (
-	fwdTXComment = "kube-nat tx"
-	fwdRXComment = "kube-nat rx"
-)
-
-func (m *iptablesManager) EnsureForwardCounters() error {
-	// TX rule: original direction (client→internet / upload).
-	txRule := []string{"-m", "conntrack", "--ctdir", "ORIGINAL",
-		"-m", "comment", "--comment", fwdTXComment, "-j", "RETURN"}
-	if exists, err := m.ipt.Exists("filter", "FORWARD", txRule...); err != nil {
-		return fmt.Errorf("check tx forward rule: %w", err)
-	} else if !exists {
-		if err := m.ipt.Insert("filter", "FORWARD", 1, txRule...); err != nil {
-			return fmt.Errorf("insert tx forward rule: %w", err)
-		}
-	}
-
-	// RX rule: reply direction (internet→client / download).
-	rxRule := []string{"-m", "conntrack", "--ctdir", "REPLY",
-		"-m", "comment", "--comment", fwdRXComment, "-j", "RETURN"}
-	if exists, err := m.ipt.Exists("filter", "FORWARD", rxRule...); err != nil {
-		return fmt.Errorf("check rx forward rule: %w", err)
-	} else if !exists {
-		if err := m.ipt.Insert("filter", "FORWARD", 2, rxRule...); err != nil {
-			return fmt.Errorf("insert rx forward rule: %w", err)
-		}
-	}
-	return nil
-}
-
-func (m *iptablesManager) GetForwardBytes() (tx uint64, rx uint64, err error) {
-	rows, err := m.ipt.Stats("filter", "FORWARD")
-	if err != nil {
-		return 0, 0, fmt.Errorf("iptables stats: %w", err)
-	}
-	for _, row := range rows {
-		// Stats row format: [pkts, bytes, target, prot, opt, in, out, src, dst, options...]
-		if len(row) < 10 {
-			continue
-		}
-		opts := strings.Join(row[9:], " ")
-		var dest *uint64
-		if strings.Contains(opts, fwdTXComment) {
-			dest = &tx
-		} else if strings.Contains(opts, fwdRXComment) {
-			dest = &rx
-		}
-		if dest != nil {
-			if v, parseErr := strconv.ParseUint(row[1], 10, 64); parseErr == nil {
-				*dest = v
-			}
-		}
-	}
-	return tx, rx, nil
-}

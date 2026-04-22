@@ -14,9 +14,7 @@ type fakeNAT struct{ ensureCalled int }
 func (f *fakeNAT) EnsureMasquerade(_ string) error            { f.ensureCalled++; return nil }
 func (f *fakeNAT) MasqueradeExists(_ string) (bool, error)    { return true, nil }
 func (f *fakeNAT) EnableIPForward() error                     { return nil }
-func (f *fakeNAT) SetConntrackMax(_ int) error                { return nil }
-func (f *fakeNAT) EnsureForwardCounters() error               { return nil }
-func (f *fakeNAT) GetForwardBytes() (uint64, uint64, error)   { return 0, 0, nil }
+func (f *fakeNAT) SetConntrackMax(_ int) error { return nil }
 
 // fakeEC2 simulates AWS route table state. currentTarget[rtbID] tracks what
 // the 0.0.0.0/0 route currently points to ("nat-xxx" or an instance ID).

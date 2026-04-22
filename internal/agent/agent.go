@@ -67,9 +67,6 @@ func Run(cfg *config.Config) error {
 	if err := nat.SetPortRange(cfg.IPLocalPortRange); err != nil {
 		return fmt.Errorf("port range: %w", err)
 	}
-	if err := natMgr.EnsureForwardCounters(); err != nil {
-		logger.Printf("WARNING: could not set up bandwidth accounting rules: %v", err)
-	}
 	logger.Printf("NAT manager ready")
 
 	// 5. Metrics
@@ -256,24 +253,24 @@ func Run(cfg *config.Config) error {
 			case <-ctx.Done():
 				return
 			case now := <-ticker.C:
-				tx, rx, err := natMgr.GetForwardBytes()
-				if err != nil {
-					logger.Printf("bandwidth read error: %v", err)
-				}
+				ifStats, ifErr := iface.GetStats(meta.PublicIface)
 				curCPU, cpuErr := iface.ReadCPUStat()
 				if !prev.ts.IsZero() {
 					elapsed := now.Sub(prev.ts).Seconds()
 					const halfLife = 20.0
 					alpha := 1 - math.Exp(-elapsed/halfLife)
-					if err == nil {
-						rawTx := float64(tx-prev.bytesTX) / elapsed
-						rawRx := float64(rx-prev.bytesRX) / elapsed
-						txEMA := alpha*rawTx + (1-alpha)*prev.txEMA
-						rxEMA := alpha*rawRx + (1-alpha)*prev.rxEMA
-						reg.TxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(txEMA)
-						reg.RxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(rxEMA)
-						prev.txEMA = txEMA
-						prev.rxEMA = rxEMA
+					if ifErr == nil {
+						tx, rx := ifStats.BytesTX, ifStats.BytesRX
+						if tx >= prev.bytesTX && rx >= prev.bytesRX {
+							rawTx := float64(tx-prev.bytesTX) / elapsed
+							rawRx := float64(rx-prev.bytesRX) / elapsed
+							txEMA := alpha*rawTx + (1-alpha)*prev.txEMA
+							rxEMA := alpha*rawRx + (1-alpha)*prev.rxEMA
+							reg.TxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(txEMA)
+							reg.RxBytesPerSec.WithLabelValues(meta.AZ, meta.InstanceID).Set(rxEMA)
+							prev.txEMA = txEMA
+							prev.rxEMA = rxEMA
+						}
 					}
 					if cpuErr == nil {
 						rawCPU := iface.CPURatio(prev.cpu, curCPU)
@@ -282,9 +279,9 @@ func Run(cfg *config.Config) error {
 						prev.cpuEMA = cpuEMA
 					}
 				}
-				if err == nil {
-					prev.bytesTX = tx
-					prev.bytesRX = rx
+				if ifErr == nil {
+					prev.bytesTX = ifStats.BytesTX
+					prev.bytesRX = ifStats.BytesRX
 				}
 				if cpuErr == nil {
 					prev.cpu = curCPU

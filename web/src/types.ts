@@ -23,6 +23,7 @@ export interface HistoryPoint {
   ts: number    // unix milliseconds
   tx: number    // bytes per second
   rx: number
+  conntrack: number  // total conntrack entries across all agents
 }
 
 export interface FailoverEvent {

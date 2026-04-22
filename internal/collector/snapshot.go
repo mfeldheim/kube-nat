@@ -43,9 +43,10 @@ type AgentSnap struct {
 
 // HistoryPoint is one bandwidth sample for the sparkline.
 type HistoryPoint struct {
-	TS    int64   `json:"ts"` // unix milliseconds
-	TxBps float64 `json:"tx"`
-	RxBps float64 `json:"rx"`
+	TS         int64   `json:"ts"` // unix milliseconds
+	TxBps      float64 `json:"tx"`
+	RxBps      float64 `json:"rx"`
+	Conntrack  float64 `json:"conntrack"` // total conntrack entries across all agents
 }
 
 // FailoverEvent is a single takeover extracted from metric label changes.

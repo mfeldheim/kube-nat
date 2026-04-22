@@ -1,6 +1,7 @@
 import {
-  AreaChart,
+  ComposedChart,
   Area,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -19,6 +20,11 @@ function fmtBytes(bps: number): string {
   return String(bps.toFixed(0))
 }
 
+function fmtConn(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(0)}k`
+  return String(Math.round(n))
+}
+
 export function BandwidthChart({ history }: Props) {
   const data = history.map((p) => ({
     t: new Date(p.ts).toLocaleTimeString(undefined, {
@@ -29,6 +35,7 @@ export function BandwidthChart({ history }: Props) {
     }),
     tx: p.tx,
     rx: p.rx,
+    conntrack: p.conntrack ?? 0,
   }))
 
   return (
@@ -41,10 +48,11 @@ export function BandwidthChart({ history }: Props) {
         <div className="flex items-center gap-4 text-xs">
           <Legend color="#34d399" label="TX" />
           <Legend color="#60a5fa" label="RX" />
+          <Legend color="#a78bfa" label="Connections" dotted />
         </div>
       </div>
       <ResponsiveContainer width="100%" height={200}>
-        <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <ComposedChart data={data} margin={{ top: 4, right: 48, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="tx" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%"   stopColor="#34d399" stopOpacity={0.55} />
@@ -56,9 +64,6 @@ export function BandwidthChart({ history }: Props) {
               <stop offset="60%"  stopColor="#60a5fa" stopOpacity={0.15} />
               <stop offset="100%" stopColor="#60a5fa" stopOpacity={0} />
             </linearGradient>
-            <filter id="line-glow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="1.4" />
-            </filter>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
           <XAxis
@@ -69,8 +74,18 @@ export function BandwidthChart({ history }: Props) {
             tickLine={false}
           />
           <YAxis
+            yAxisId="bw"
             tickFormatter={fmtBytes}
             tick={{ fill: '#6b7280', fontSize: 10 }}
+            width={40}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            yAxisId="conn"
+            orientation="right"
+            tickFormatter={fmtConn}
+            tick={{ fill: '#a78bfa', fontSize: 10 }}
             width={40}
             axisLine={false}
             tickLine={false}
@@ -85,11 +100,16 @@ export function BandwidthChart({ history }: Props) {
               backdropFilter: 'blur(8px)',
             }}
             labelStyle={{ color: '#94a3b8', marginBottom: 4 }}
-            formatter={(v: number, name: string) => [`${fmtBytes(v)} B/s`, name === 'tx' ? 'TX' : 'RX']}
+            formatter={(v: number, name: string) => {
+              if (name === 'conntrack') return [fmtConn(v), 'Connections']
+              return [`${fmtBytes(v)} B/s`, name === 'tx' ? 'TX' : 'RX']
+            }}
           />
           <Area
+            yAxisId="bw"
             type="monotone"
             dataKey="tx"
+            stackId="bw"
             stroke="#34d399"
             fill="url(#tx)"
             strokeWidth={2}
@@ -97,27 +117,42 @@ export function BandwidthChart({ history }: Props) {
             activeDot={{ r: 4, strokeWidth: 0, fill: '#34d399' }}
           />
           <Area
+            yAxisId="bw"
             type="monotone"
             dataKey="rx"
+            stackId="bw"
             stroke="#60a5fa"
             fill="url(#rx)"
             strokeWidth={2}
             dot={false}
             activeDot={{ r: 4, strokeWidth: 0, fill: '#60a5fa' }}
           />
-        </AreaChart>
+          <Line
+            yAxisId="conn"
+            type="monotone"
+            dataKey="conntrack"
+            stroke="#a78bfa"
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+            dot={false}
+            activeDot={{ r: 3, strokeWidth: 0, fill: '#a78bfa' }}
+          />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   )
 }
 
-function Legend({ color, label }: { color: string; label: string }) {
+function Legend({ color, label, dotted }: { color: string; label: string; dotted?: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-gray-400">
-      <span
-        className="h-2 w-2 rounded-full"
-        style={{ background: color, boxShadow: `0 0 10px ${color}` }}
-      />
+      {dotted ? (
+        <svg width="16" height="8" viewBox="0 0 16 8">
+          <line x1="0" y1="4" x2="16" y2="4" stroke={color} strokeWidth="1.5" strokeDasharray="4 3" />
+        </svg>
+      ) : (
+        <span className="h-2 w-2 rounded-full" style={{ background: color, boxShadow: `0 0 10px ${color}` }} />
+      )}
       {label}
     </span>
   )

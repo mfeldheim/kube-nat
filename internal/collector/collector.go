@@ -98,9 +98,10 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	}
 
 	var (
-		agents  = make([]AgentSnap, 0)
-		totalTx float64
-		totalRx float64
+		agents          = make([]AgentSnap, 0)
+		totalTx         float64
+		totalRx         float64
+		totalConntrack  float64
 	)
 
 	// Track which AZs are present in this scrape to detect disappeared agents.
@@ -170,6 +171,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		agents = append(agents, *snap)
 		totalTx += snap.TxBytesPerSec
 		totalRx += snap.RxBytesPerSec
+		totalConntrack += snap.ConntrackEntries
 	}
 
 	// Detect agents that were previously seen but are missing this scrape.
@@ -188,9 +190,10 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 
 	// Maintain history ring buffer (last 60 points = 5 min at 5s interval).
 	c.history = append(c.history, HistoryPoint{
-		TS:    time.Now().UnixMilli(),
-		TxBps: totalTx,
-		RxBps: totalRx,
+		TS:        time.Now().UnixMilli(),
+		TxBps:     totalTx,
+		RxBps:     totalRx,
+		Conntrack: totalConntrack,
 	})
 	if len(c.history) > 60 {
 		c.history = c.history[len(c.history)-60:]

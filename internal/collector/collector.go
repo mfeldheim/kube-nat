@@ -28,6 +28,7 @@ type Config struct {
 type agentState struct {
 	peerUp      bool
 	rulePresent bool
+	routeTables []string // owned route table IDs from last scrape
 }
 
 // Collector discovers agent pods and scrapes their metrics.
@@ -43,19 +44,21 @@ type Collector struct {
 	failovers []FailoverEvent
 
 	// state tracking for event detection
-	seenAZs     map[string]bool       // AZs we have previously observed
-	agentStates map[string]agentState // last known state per AZ
-	lastFailoverTS map[string]float64 // last seen kube_nat_last_failover_seconds per AZ
+	seenAZs         map[string]bool       // AZs we have previously observed
+	agentStates     map[string]agentState // last known state per AZ
+	failoverCounters map[string]float64   // "from_az/to_az" → last seen kube_nat_failover_total value
+	coveredAZs      map[string]bool       // AZs that lost control and are being covered by another agent
 }
 
 // New creates a Collector.
 func New(cfg Config) *Collector {
 	return &Collector{
-		cfg:            cfg,
-		client:         &http.Client{Timeout: 3 * time.Second},
-		seenAZs:        make(map[string]bool),
-		agentStates:    make(map[string]agentState),
-		lastFailoverTS: make(map[string]float64),
+		cfg:              cfg,
+		client:           &http.Client{Timeout: 3 * time.Second},
+		seenAZs:          make(map[string]bool),
+		agentStates:      make(map[string]agentState),
+		failoverCounters: make(map[string]float64),
+		coveredAZs:       make(map[string]bool),
 	}
 }
 
@@ -82,9 +85,9 @@ func (c *Collector) appendFailover(f FailoverEvent) {
 	}
 	c.appendEvent(EventEntry{
 		TS:     time.Now().UnixMilli(),
-		AZ:     f.FromAZ,
+		AZ:     f.ToAZ,
 		Kind:   "failover",
-		Detail: fmt.Sprintf("route table for %s taken over by %s", f.FromAZ, f.ToAZ),
+		Detail: fmt.Sprintf("%s is taking over route table(s) for %s", f.ToAZ, f.FromAZ),
 	})
 }
 
@@ -136,7 +139,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 			})
 		}
 
-		// Detect peer_up transitions.
+		// Detect peer_up / peer_down transitions.
 		if prev, ok := c.agentStates[snap.AZ]; ok {
 			if !prev.peerUp && snap.PeerUp {
 				c.appendEvent(EventEntry{
@@ -153,17 +156,39 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 					Detail: fmt.Sprintf("peer connection lost for %s", snap.AZ),
 				})
 			}
-		}
-		c.agentStates[snap.AZ] = agentState{peerUp: snap.PeerUp, rulePresent: snap.RulePresent}
 
-		// Detect failover events from changes in kube_nat_last_failover_seconds.
-		if snap.LastFailoverTS > 0 && snap.LastFailoverTS != c.lastFailoverTS[snap.AZ] {
-			c.appendFailover(FailoverEvent{
-				FromAZ: snap.AZ,
-				ToAZ:   snap.AZ,
-				TS:     snap.LastFailoverTS,
-			})
-			c.lastFailoverTS[snap.AZ] = snap.LastFailoverTS
+			// Detect route table changes.
+			added, removed := diffStringSet(prev.routeTables, snap.RouteTablesOwned)
+			if len(added) > 0 || len(removed) > 0 {
+				detail := routeChangeDetail(added, removed)
+				c.appendEvent(EventEntry{
+					TS:     time.Now().UnixMilli(),
+					AZ:     snap.AZ,
+					Kind:   "route_update",
+					Detail: detail,
+				})
+			}
+
+			// Detect "regained control": agent was being covered and now owns tables again.
+			if c.coveredAZs[snap.AZ] && len(prev.routeTables) == 0 && len(snap.RouteTablesOwned) > 0 {
+				c.appendEvent(EventEntry{
+					TS:     time.Now().UnixMilli(),
+					AZ:     snap.AZ,
+					Kind:   "route_regained",
+					Detail: fmt.Sprintf("%s reclaimed its route table(s): %s", snap.AZ, joinStrings(snap.RouteTablesOwned)),
+				})
+				delete(c.coveredAZs, snap.AZ)
+			}
+		}
+
+		// Detect failovers from kube_nat_failover_total counter increases.
+		// This metric is set by the covering agent (to_az) for the dead AZ (from_az).
+		c.detectFailovers(families, snap.AZ)
+
+		c.agentStates[snap.AZ] = agentState{
+			peerUp:      snap.PeerUp,
+			rulePresent: snap.RulePresent,
+			routeTables: snap.RouteTablesOwned,
 		}
 
 		c.mu.Unlock()
@@ -334,4 +359,82 @@ func gaugeVal(families map[string]*dto.MetricFamily, name string) float64 {
 		return mf.Metric[0].Gauge.GetValue()
 	}
 	return 0
+}
+
+// detectFailovers reads kube_nat_failover_total from scraped families and emits
+// failover events when a counter increases. toAZ is the AZ of the agent being scraped
+// (i.e. the covering agent). Caller must hold c.mu.
+func (c *Collector) detectFailovers(families map[string]*dto.MetricFamily, toAZ string) {
+	mf, ok := families["kube_nat_failover_total"]
+	if !ok {
+		return
+	}
+	for _, m := range mf.Metric {
+		var fromAZ string
+		for _, lp := range m.Label {
+			if lp.GetName() == "from_az" {
+				fromAZ = lp.GetValue()
+			}
+		}
+		if fromAZ == "" || m.Counter == nil {
+			continue
+		}
+		key := fromAZ + "/" + toAZ
+		val := m.Counter.GetValue()
+		if prev, seen := c.failoverCounters[key]; !seen || val > prev {
+			if seen {
+				// Counter increased — a new takeover happened.
+				c.appendFailover(FailoverEvent{
+					FromAZ: fromAZ,
+					ToAZ:   toAZ,
+					TS:     float64(time.Now().Unix()),
+				})
+				c.coveredAZs[fromAZ] = true
+			}
+			c.failoverCounters[key] = val
+		}
+	}
+}
+
+// diffStringSet returns slices of strings added to and removed from a compared to b.
+func diffStringSet(prev, curr []string) (added, removed []string) {
+	prevSet := make(map[string]bool, len(prev))
+	for _, s := range prev {
+		prevSet[s] = true
+	}
+	currSet := make(map[string]bool, len(curr))
+	for _, s := range curr {
+		currSet[s] = true
+	}
+	for _, s := range curr {
+		if !prevSet[s] {
+			added = append(added, s)
+		}
+	}
+	for _, s := range prev {
+		if !currSet[s] {
+			removed = append(removed, s)
+		}
+	}
+	return
+}
+
+// routeChangeDetail formats a human-readable description of route table changes.
+func routeChangeDetail(added, removed []string) string {
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "claimed "+joinStrings(added))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "released "+joinStrings(removed))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "; ")
+}
+
+// joinStrings formats a slice as a comma-separated string.
+func joinStrings(ss []string) string {
+	return strings.Join(ss, ", ")
 }

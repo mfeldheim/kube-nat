@@ -15,7 +15,7 @@ type Snapshot struct {
 type EventEntry struct {
 	TS     int64  `json:"ts"`     // unix milliseconds
 	AZ     string `json:"az"`
-	Kind   string `json:"kind"`   // "failover","peer_down","peer_up","agent_appeared","agent_lost","route_claimed"
+	Kind   string `json:"kind"`   // "failover","peer_down","peer_up","agent_appeared","agent_lost","route_update","route_regained"
 	Detail string `json:"detail"`
 }
 

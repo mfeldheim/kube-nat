@@ -23,8 +23,8 @@ const kindLabel: Record<string, string> = {
   peer_up:        'PEER UP',
   agent_appeared: 'AGENT UP',
   agent_lost:     'AGENT LOST',
-  route_claimed:  'ROUTE CLAIM',
-  route_released: 'ROUTE RELEASE',
+  route_update:   'ROUTE UPDATE',
+  route_regained: 'REGAINED',
 }
 
 const kindChip: Record<string, string> = {
@@ -33,8 +33,8 @@ const kindChip: Record<string, string> = {
   peer_up:        'chip-ok',
   agent_appeared: 'chip-info',
   agent_lost:     'chip-bad',
-  route_claimed:  'chip chip-muted !border-violet-400/30 !bg-violet-400/10 !text-violet-300',
-  route_released: 'chip chip-muted !border-amber-400/30 !bg-amber-400/10 !text-amber-300',
+  route_update:   'chip chip-muted !border-violet-400/30 !bg-violet-400/10 !text-violet-300',
+  route_regained: 'chip chip-muted !border-green-400/30 !bg-green-400/10 !text-green-300',
 }
 
 export function EventLog({ events }: Props) {

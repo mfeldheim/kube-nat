@@ -35,7 +35,7 @@ export interface FailoverEvent {
 export interface EventEntry {
   ts: number    // unix milliseconds
   az: string
-  kind: 'failover' | 'peer_down' | 'peer_up' | 'agent_appeared' | 'agent_lost' | 'route_claimed'
+  kind: 'failover' | 'peer_down' | 'peer_up' | 'agent_appeared' | 'agent_lost' | 'route_update' | 'route_regained'
   detail: string
 }
 

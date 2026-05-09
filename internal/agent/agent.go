@@ -327,6 +327,9 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 
 	var azMu sync.Mutex
 	connectedAZs := make(map[string]bool)
+	// staleInstances tracks the instance ID of a peer that failed or stepped down,
+	// so its metric label set can be deleted when the replacement is discovered.
+	staleInstances := make(map[string]string) // az → old instanceID
 
 	discover := func() {
 		podList, err := k8sClient.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
@@ -345,6 +348,11 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 			already := connectedAZs[podAZ]
 			if !already {
 				connectedAZs[podAZ] = true
+				// If a previous instance for this AZ had failed, clean up its stale metric.
+				if staleID := staleInstances[podAZ]; staleID != "" && staleID != pod.Spec.NodeName {
+					reg.PeerStatus.DeleteLabelValues(podAZ, staleID)
+					delete(staleInstances, podAZ)
+				}
 			}
 			azMu.Unlock()
 			if already {
@@ -357,8 +365,6 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 
 			logger.Printf("discovered peer az=%s instance=%s addr=%s", peerAZ, peerInstanceID, peerAddr)
 			reg.PeerStatus.WithLabelValues(peerAZ, peerInstanceID).Set(1)
-			// Pre-initialize failover counters for both directions so they show 0 in /metrics
-			// from the moment the peer is discovered, rather than only after the first event.
 			reg.FailoverTotal.WithLabelValues(peerAZ, meta.AZ)
 			reg.FailoverTotal.WithLabelValues(meta.AZ, peerAZ)
 
@@ -368,10 +374,9 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 				OnFailure: func(az string) {
 					reg.PeerStatus.WithLabelValues(az, peerInstanceID).Set(0)
 					logger.Printf("peer %s declared dead — attempting takeover", az)
-					// Remove from connectedAZs so the next discovery tick can reconnect
-					// if the peer restarts (e.g. rolling update).
 					azMu.Lock()
 					delete(connectedAZs, az)
+					staleInstances[az] = peerInstanceID
 					azMu.Unlock()
 					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
 				},
@@ -379,6 +384,7 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 					logger.Printf("peer %s stepping down — taking over", az)
 					azMu.Lock()
 					delete(connectedAZs, az)
+					staleInstances[az] = peerInstanceID
 					azMu.Unlock()
 					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
 				},

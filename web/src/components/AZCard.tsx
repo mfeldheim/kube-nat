@@ -91,16 +91,13 @@ export function AZCard({ agent: a }: Props) {
       </div>
 
       {/* ── Row 2: Instance facts ── */}
-      <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px]">
+      <div className="space-y-1 text-[11px]">
         <Fact icon={<IconServer />} label={instanceType} title="Instance type" mono />
-        <span className="text-gray-700 select-none">·</span>
         <Fact icon={<IconID />} label={a.instance_id || '—'} title="Instance ID" mono />
-        {hasRoutes && (
-          <>
-            <span className="text-gray-700 select-none">·</span>
-            <Fact icon={<IconRoute />} label={a.route_tables.join(', ')} title="Owned route tables" mono />
-          </>
-        )}
+        {hasRoutes ? (
+          <Fact icon={<IconRoute />} label={a.route_tables.join(', ')} title="Owned route tables" mono />
+        ) : null}
+        <Fact icon={<IconTag />} label={a.version || '—'} title="Agent version" mono />
       </div>
 
       {/* ── Row 3: Speed gauges ── */}
@@ -269,6 +266,14 @@ function IconRoute() {
     <svg className="h-3 w-3 shrink-0 text-gray-500" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path fillRule="evenodd" d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/>
       <path fillRule="evenodd" d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0v-5z"/>
+    </svg>
+  )
+}
+
+function IconTag() {
+  return (
+    <svg className="h-3 w-3 shrink-0 text-gray-500" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M2 2.5A1.5 1.5 0 0 1 3.5 1h3.793a1.5 1.5 0 0 1 1.06.44l5.207 5.207a1.5 1.5 0 0 1 0 2.121l-4.793 4.793a1.5 1.5 0 0 1-2.121 0L1.44 8.354A1.5 1.5 0 0 1 1 7.293V3.5A1.5 1.5 0 0 1 2.5 2zm2-.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>
     </svg>
   )
 }

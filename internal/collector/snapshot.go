@@ -25,6 +25,7 @@ type AgentSnap struct {
 	AZ               string   `json:"az"`
 	InstanceID       string   `json:"instance_id"`
 	InstanceType     string   `json:"instance_type"`     // e.g. "m5.large"
+	Version          string   `json:"version"`
 	TxBytesPerSec    float64  `json:"tx_bps"`
 	RxBytesPerSec    float64  `json:"rx_bps"`
 	ConntrackEntries float64  `json:"conntrack_entries"`

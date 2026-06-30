@@ -289,6 +289,9 @@ func (c *Collector) buildSnap(families map[string]*dto.MetricFamily) *AgentSnap 
 				if lp.GetName() == "instance_type" {
 					snap.InstanceType = lp.GetValue()
 				}
+				if lp.GetName() == "version" {
+					snap.Version = lp.GetValue()
+				}
 			}
 		}
 	}

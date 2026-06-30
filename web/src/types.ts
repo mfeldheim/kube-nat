@@ -2,6 +2,7 @@ export interface AgentSnap {
   az: string
   instance_id: string
   instance_type: string     // e.g. "m5.large"
+  version: string
   tx_bps: number
   rx_bps: number
   conntrack_entries: number

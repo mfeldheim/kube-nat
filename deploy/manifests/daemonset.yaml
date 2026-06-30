@@ -51,6 +51,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: KUBE_NAT_SERVER_VERSION
+          value: latest
         ports:
         - name: metrics
           containerPort: 9100

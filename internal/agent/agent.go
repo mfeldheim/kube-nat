@@ -89,8 +89,8 @@ func Run(cfg *config.Config) error {
 		logger.Printf("instance type=%s peak bandwidth=%.0f bps (%.1f Gbps)", meta.InstanceType, maxBps, maxBps/1e9)
 	}
 
-	// Expose instance type as a label so the dashboard can display it.
-	reg.InstanceInfo.WithLabelValues(meta.InstanceType).Set(1)
+	// Expose instance type and version as labels so the dashboard can display them.
+	reg.InstanceInfo.WithLabelValues(meta.InstanceType, cfg.ServerVersion).Set(1)
 
 	// 6. Kubernetes client (in-cluster)
 	logger.Printf("initializing Kubernetes in-cluster client")

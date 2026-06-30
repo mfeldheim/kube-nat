@@ -31,7 +31,7 @@ type Registry struct {
 	RxBytesPerSec *prometheus.GaugeVec
 
 	// Node resource metrics.
-	InstanceInfo  *prometheus.GaugeVec // label: instance_type; value always 1
+	InstanceInfo  *prometheus.GaugeVec // labels: instance_type, version; value always 1
 	CPUUsageRatio prometheus.Gauge
 	MemUsedBytes  prometheus.Gauge
 	MemTotalBytes prometheus.Gauge
@@ -102,7 +102,7 @@ func NewRegistry() *Registry {
 	m.InstanceInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kube_nat_instance_info",
 		Help: "Instance metadata; value is always 1, use labels for info",
-	}, []string{"instance_type"})
+	}, []string{"instance_type", "version"})
 	m.CPUUsageRatio = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "kube_nat_cpu_usage_ratio",
 		Help: "Node CPU usage ratio (0–1), EMA-smoothed over 1s samples",

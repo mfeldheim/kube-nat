@@ -47,6 +47,8 @@ spec:
               fieldPath: metadata.name
         - name: POD_NAMESPACE
           value: {{ .Values.namespace | quote }}
+        - name: KUBE_NAT_SERVER_VERSION
+          value: {{ .Values.image.tag | quote }}
         - name: KUBE_NAT_MODE
           value: {{ .Values.agent.mode | quote }}
         - name: KUBE_NAT_TAG_PREFIX

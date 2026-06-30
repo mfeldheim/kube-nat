@@ -8,6 +8,15 @@ kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE Daemo
 
 ---
 
+## Changelog
+
+### v0.1.17 (2026-06-30)
+
+- AWS route updates now use explicit upsert semantics for `0.0.0.0/0`: the agent tries `CreateRoute` first and falls back to `ReplaceRoute` when the route already exists.
+- This avoids failures when there is no existing route to replace and makes reconciliation resilient to route-table drift.
+
+---
+
 ## Why replace NAT Gateway?
 
 ### The cost problem

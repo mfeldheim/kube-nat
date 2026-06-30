@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 )
 
 type RouteTable struct {
@@ -102,27 +104,56 @@ func (c *realEC2Client) DiscoverRouteTables(ctx context.Context, az string) ([]R
 }
 
 func (c *realEC2Client) ClaimRouteTable(ctx context.Context, rtbID, instanceID string) error {
-	_, err := c.svc.ReplaceRoute(ctx, &ec2.ReplaceRouteInput{
+	createIn := &ec2.CreateRouteInput{
 		RouteTableId:         aws.String(rtbID),
 		DestinationCidrBlock: aws.String("0.0.0.0/0"),
 		InstanceId:           aws.String(instanceID),
-	})
+	}
+	_, err := c.svc.CreateRoute(ctx, createIn)
+	if err != nil && isEC2ErrorCode(err, "RouteAlreadyExists") {
+		_, err = c.svc.ReplaceRoute(ctx, &ec2.ReplaceRouteInput{
+			RouteTableId:         aws.String(rtbID),
+			DestinationCidrBlock: aws.String("0.0.0.0/0"),
+			InstanceId:           aws.String(instanceID),
+		})
+	}
 	if err != nil {
-		return fmt.Errorf("replace route in %s: %w", rtbID, err)
+		return fmt.Errorf("upsert route in %s: %w", rtbID, err)
 	}
 	return nil
 }
 
 func (c *realEC2Client) ReleaseRouteTable(ctx context.Context, rtbID, natGatewayID string) error {
-	_, err := c.svc.ReplaceRoute(ctx, &ec2.ReplaceRouteInput{
+	createIn := &ec2.CreateRouteInput{
 		RouteTableId:         aws.String(rtbID),
 		DestinationCidrBlock: aws.String("0.0.0.0/0"),
 		NatGatewayId:         aws.String(natGatewayID),
-	})
+	}
+	_, err := c.svc.CreateRoute(ctx, createIn)
+	if err != nil && isEC2ErrorCode(err, "RouteAlreadyExists") {
+		_, err = c.svc.ReplaceRoute(ctx, &ec2.ReplaceRouteInput{
+			RouteTableId:         aws.String(rtbID),
+			DestinationCidrBlock: aws.String("0.0.0.0/0"),
+			NatGatewayId:         aws.String(natGatewayID),
+		})
+	}
 	if err != nil {
-		return fmt.Errorf("restore nat gateway route in %s: %w", rtbID, err)
+		return fmt.Errorf("upsert nat gateway route in %s: %w", rtbID, err)
 	}
 	return nil
+}
+
+func isEC2ErrorCode(err error, codes ...string) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	for _, code := range codes {
+		if apiErr.ErrorCode() == code {
+			return true
+		}
+	}
+	return false
 }
 
 // LookupNatGateway finds an available NAT gateway in the given VPC, preferring

@@ -276,6 +276,7 @@ func (c *Collector) buildSnap(families map[string]*dto.MetricFamily) *AgentSnap 
 	snap.ConntrackRatio = gaugeVal(families, "kube_nat_conntrack_usage_ratio")
 	snap.RulePresent = gaugeVal(families, "kube_nat_rule_present") >= 1
 	snap.SrcDstDisabled = gaugeVal(families, "kube_nat_src_dst_check_disabled") >= 1
+	snap.FallbackAvailable = gaugeVal(families, "kube_nat_fallback_available") >= 1
 	snap.SpotPending = gaugeVal(families, "kube_nat_spot_interruption_pending") >= 1
 	snap.MaxBandwidthBps = gaugeVal(families, "kube_nat_max_bandwidth_bps")
 	snap.CPUUsageRatio = gaugeVal(families, "kube_nat_cpu_usage_ratio")

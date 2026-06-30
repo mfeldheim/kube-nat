@@ -36,6 +36,9 @@ kube_nat_rule_present{rule="MASQUERADE"} 1
 # HELP kube_nat_src_dst_check_disabled src/dst check
 # TYPE kube_nat_src_dst_check_disabled gauge
 kube_nat_src_dst_check_disabled 1
+# HELP kube_nat_fallback_available fallback availability
+# TYPE kube_nat_fallback_available gauge
+kube_nat_fallback_available 1
 # HELP kube_nat_route_table_owned route table owned
 # TYPE kube_nat_route_table_owned gauge
 kube_nat_route_table_owned{rtb_id="rtb-001"} 1
@@ -92,6 +95,9 @@ func TestCollectBuildsAgentSnap(t *testing.T) {
 	}
 	if !a.SrcDstDisabled {
 		t.Error("expected src_dst_disabled=true")
+	}
+	if !a.FallbackAvailable {
+		t.Error("expected fallback_available=true")
 	}
 	if len(a.RouteTablesOwned) != 1 || a.RouteTablesOwned[0] != "rtb-001" {
 		t.Errorf("expected [rtb-001], got %v", a.RouteTablesOwned)

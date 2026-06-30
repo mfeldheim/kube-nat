@@ -21,6 +21,7 @@ func (f *fakeNAT) SetConntrackMax(_ int) error { return nil }
 type fakeEC2 struct {
 	claimCalled   int
 	currentTarget map[string]string // rtbID → current route target
+	lookupErr     error
 }
 
 func newFakeEC2(rtbID, initialTarget string) *fakeEC2 {
@@ -53,6 +54,9 @@ func (f *fakeEC2) ReleaseRouteTable(_ context.Context, rtbID, natGwID string) er
 }
 
 func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, error) {
+	if f.lookupErr != nil {
+		return "", f.lookupErr
+	}
 	return "nat-fallback", nil
 }
 
@@ -161,6 +165,28 @@ func TestReconcileRecorrectsRouteIfTampered(t *testing.T) {
 	}
 	if e.currentTarget["rtb-001"] != "i-0abc" {
 		t.Errorf("want route restored to i-0abc, got %s", e.currentTarget["rtb-001"])
+	}
+}
+
+func TestCanFallbackToNATFalseWhenNoFallbackExists(t *testing.T) {
+	n := &fakeNAT{}
+	e := newFakeEC2("rtb-001", "")
+	e.lookupErr = context.DeadlineExceeded
+	r := reconciler.New(reconciler.Config{
+		NATManager: n,
+		EC2Client:  e,
+		Iface:      "eth0",
+		AZ:         "eu-west-1a",
+		InstanceID: "i-0abc",
+		Mode:       "auto",
+		LogWriter:  io.Discard,
+	})
+
+	if err := r.ClaimRouteTables(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.CanFallbackToNAT() {
+		t.Error("expected CanFallbackToNAT to be false when no NAT gateway fallback exists")
 	}
 }
 

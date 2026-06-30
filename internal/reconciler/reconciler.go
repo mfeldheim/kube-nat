@@ -58,6 +58,56 @@ func (r *Reconciler) OwnedTables() []string {
 	return out
 }
 
+// CanFallbackToNAT reports whether every currently owned route table has a known
+// NAT gateway target that ReleaseRouteTables can restore traffic to.
+func (r *Reconciler) CanFallbackToNAT() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.ownedTables) == 0 {
+		return false
+	}
+	for _, rtbID := range r.ownedTables {
+		if r.originalNatGW[rtbID] == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Reconciler) cacheFallbackTargets(ctx context.Context, tables []kubenataws.RouteTable) {
+	for _, rt := range tables {
+		r.mu.Lock()
+		if rt.VpcID != "" {
+			r.rtbVpcID[rt.ID] = rt.VpcID
+		}
+		if rt.NatGatewayID != "" {
+			if _, exists := r.originalNatGW[rt.ID]; !exists {
+				r.originalNatGW[rt.ID] = rt.NatGatewayID
+			}
+			r.mu.Unlock()
+			continue
+		}
+		if r.originalNatGW[rt.ID] != "" || r.rtbVpcID[rt.ID] == "" {
+			r.mu.Unlock()
+			continue
+		}
+		vpcID := r.rtbVpcID[rt.ID]
+		r.mu.Unlock()
+
+		found, err := r.cfg.EC2Client.LookupNatGateway(ctx, vpcID, r.cfg.AZ)
+		if err != nil {
+			r.logger.Printf("fallback target lookup for %s in vpc=%s az=%s: %v", rt.ID, vpcID, r.cfg.AZ, err)
+			continue
+		}
+
+		r.mu.Lock()
+		if r.originalNatGW[rt.ID] == "" {
+			r.originalNatGW[rt.ID] = found
+		}
+		r.mu.Unlock()
+	}
+}
+
 // AddForeignTables registers route tables claimed on behalf of a dead AZ.
 // These are monitored by ReconcileForeign to detect when the original owner recovers.
 func (r *Reconciler) AddForeignTables(deadAZ string, rtbIDs []string) {
@@ -186,18 +236,8 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 		confirmed = append(confirmed, rt.ID)
 
-		// Record VPC ID and original NAT GW for fallback (only on first observation).
-		r.mu.Lock()
-		if rt.VpcID != "" {
-			r.rtbVpcID[rt.ID] = rt.VpcID
-		}
-		if rt.NatGatewayID != "" {
-			if _, exists := r.originalNatGW[rt.ID]; !exists {
-				r.originalNatGW[rt.ID] = rt.NatGatewayID
-			}
-		}
-		r.mu.Unlock()
 	}
+	r.cacheFallbackTargets(ctx, tables)
 
 	r.mu.Lock()
 	if r.cfg.Mode != "manual" {
@@ -233,17 +273,8 @@ func (r *Reconciler) ClaimRouteTables(ctx context.Context) error {
 
 	r.mu.Lock()
 	r.ownedTables = owned
-	for _, rt := range tables {
-		if rt.VpcID != "" {
-			r.rtbVpcID[rt.ID] = rt.VpcID
-		}
-		if rt.NatGatewayID != "" {
-			if _, exists := r.originalNatGW[rt.ID]; !exists {
-				r.originalNatGW[rt.ID] = rt.NatGatewayID
-			}
-		}
-	}
 	r.mu.Unlock()
+	r.cacheFallbackTargets(ctx, tables)
 	return nil
 }
 

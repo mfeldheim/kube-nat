@@ -18,6 +18,7 @@ type Registry struct {
 	RulePresent         *prometheus.GaugeVec
 	SrcDstCheckDisabled prometheus.Gauge
 	RouteTableOwned     *prometheus.GaugeVec
+	FallbackAvailable   prometheus.Gauge
 
 	PeerStatus    *prometheus.GaugeVec
 	FailoverTotal *prometheus.CounterVec
@@ -75,6 +76,10 @@ func NewRegistry() *Registry {
 	m.RouteTableOwned = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kube_nat_route_table_owned", Help: "1 if this node owns the route table",
 	}, []string{"rtb_id"})
+	m.FallbackAvailable = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_nat_fallback_available",
+		Help: "1 if all currently owned route tables have a known NAT gateway fallback target",
+	})
 	m.PeerStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kube_nat_peer_status", Help: "1=peer up, 0=peer down",
 	}, []string{"az", "instance_id"})
@@ -119,7 +124,7 @@ func NewRegistry() *Registry {
 	r.MustRegister(
 		m.BytesTX, m.BytesRX, m.PacketsTX, m.PacketsRX,
 		m.ConntrackEntries, m.ConntrackMax, m.ConntrackUsageRatio,
-		m.RulePresent, m.SrcDstCheckDisabled, m.RouteTableOwned,
+		m.RulePresent, m.SrcDstCheckDisabled, m.RouteTableOwned, m.FallbackAvailable,
 		m.PeerStatus, m.FailoverTotal, m.LastFailover,
 		m.SpotInterruptionPending, m.MaxBandwidthBps,
 		m.TxBytesPerSec, m.RxBytesPerSec,

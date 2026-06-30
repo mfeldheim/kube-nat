@@ -474,6 +474,11 @@ func updateMetrics(reg *metrics.Registry, meta *kubenataws.InstanceMetadata, nat
 	for _, rtbID := range rec.OwnedTables() {
 		reg.RouteTableOwned.WithLabelValues(rtbID).Set(1)
 	}
+	if rec.CanFallbackToNAT() {
+		reg.FallbackAvailable.Set(1)
+	} else {
+		reg.FallbackAvailable.Set(0)
+	}
 }
 
 func podNameOrInstanceID(instanceID string) string {

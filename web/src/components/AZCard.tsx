@@ -142,7 +142,7 @@ export function AZCard({ agent: a }: Props) {
           <Flag ok={a.peer_up}          label="peer" />
         </div>
         <div className="flex gap-2">
-          {hasRoutes && (
+          {hasRoutes && a.fallback_available && (
             <button
               onClick={handleRelease}
               disabled={releaseState === 'loading'}

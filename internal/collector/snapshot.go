@@ -32,6 +32,7 @@ type AgentSnap struct {
 	ConntrackMax     float64  `json:"conntrack_max"`
 	ConntrackRatio   float64  `json:"conntrack_ratio"`
 	RouteTablesOwned []string `json:"route_tables"`
+	FallbackAvailable bool     `json:"fallback_available"`
 	PeerUp           bool     `json:"peer_up"`
 	SpotPending      bool     `json:"spot_pending"`
 	RulePresent      bool     `json:"rule_present"`

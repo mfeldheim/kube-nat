@@ -9,6 +9,7 @@ export interface AgentSnap {
   conntrack_max: number
   conntrack_ratio: number
   route_tables: string[]
+  fallback_available: boolean
   peer_up: boolean
   spot_pending: boolean
   rule_present: boolean

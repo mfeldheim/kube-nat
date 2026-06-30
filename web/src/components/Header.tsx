@@ -2,9 +2,10 @@ import type { AgentSnap } from '../types'
 
 interface Props {
   agents: AgentSnap[]
+  serverVersion?: string
 }
 
-export function Header({ agents }: Props) {
+export function Header({ agents, serverVersion }: Props) {
   const healthy = agents.filter((a) => a.rule_present && a.src_dst_disabled).length
   const isHealthy = healthy === agents.length && agents.length > 0
   const status = isHealthy ? 'Healthy' : 'Degraded'
@@ -19,6 +20,9 @@ export function Header({ agents }: Props) {
           </h1>
           <span className="hidden sm:inline text-xs text-gray-500 font-mono uppercase tracking-[0.2em]">
             dashboard
+            {serverVersion ? (
+              <span className="ml-2 text-[10px] text-gray-400 normal-case tracking-normal">{serverVersion}</span>
+            ) : null}
           </span>
         </div>
 

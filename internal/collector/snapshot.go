@@ -4,11 +4,12 @@ import "time"
 
 // Snapshot is the complete state of the cluster pushed to browser clients every scrape.
 type Snapshot struct {
-	Timestamp time.Time       `json:"ts"`
-	Agents    []AgentSnap     `json:"agents"`
-	History   []HistoryPoint  `json:"history"`  // last 60 points (5 min at 5s interval)
-	Failovers []FailoverEvent `json:"failovers"`
-	Events    []EventEntry    `json:"events"`   // last 100 events since dashboard start
+	Timestamp     time.Time       `json:"ts"`
+	ServerVersion string          `json:"server_version,omitempty"`
+	Agents        []AgentSnap     `json:"agents"`
+	History       []HistoryPoint  `json:"history"`  // last 60 points (5 min at 5s interval)
+	Failovers     []FailoverEvent `json:"failovers"`
+	Events        []EventEntry    `json:"events"`   // last 100 events since dashboard start
 }
 
 // EventEntry is a single entry in the event log (state transitions + manual actions).

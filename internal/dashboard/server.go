@@ -24,6 +24,7 @@ type Config struct {
 	Namespace      string
 	MetricsPort    int
 	ScrapeInterval int // seconds
+	ServerVersion  string
 }
 
 // Server is the dashboard HTTP server.
@@ -92,6 +93,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 					s.logger.Printf("collect error: %v", err)
 					continue
 				}
+				snap.ServerVersion = s.cfg.ServerVersion
 				b, err := json.Marshal(snap)
 				if err != nil {
 					s.logger.Printf("marshal error: %v", err)
@@ -197,6 +199,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Send current snapshot immediately so browser doesn't wait for the first tick.
 	snap, err := s.collector.Collect(r.Context())
 	if err == nil {
+		snap.ServerVersion = s.cfg.ServerVersion
 		if b, err := json.Marshal(snap); err == nil {
 			conn.Write(r.Context(), websocket.MessageText, b)
 		}

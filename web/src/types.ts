@@ -41,6 +41,7 @@ export interface EventEntry {
 
 export interface Snapshot {
   ts: string          // ISO timestamp
+  server_version?: string
   agents: AgentSnap[]
   history: HistoryPoint[]
   failovers: FailoverEvent[]

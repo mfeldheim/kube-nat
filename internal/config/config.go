@@ -23,6 +23,7 @@ type Config struct {
 	Namespace         string
 	ScrapeInterval    time.Duration
 	DashboardPort     int
+	ServerVersion     string
 }
 
 func Load() (*Config, error) {
@@ -42,6 +43,7 @@ func Load() (*Config, error) {
 		Namespace:         getEnv("POD_NAMESPACE", "kube-system"),
 		ScrapeInterval:    getDurationEnv("KUBE_NAT_SCRAPE_INTERVAL", 5*time.Second),
 		DashboardPort:     getIntEnv("KUBE_NAT_DASHBOARD_PORT", 8080),
+		ServerVersion:     getEnv("KUBE_NAT_SERVER_VERSION", "dev"),
 	}
 	if cfg.Mode != "auto" && cfg.Mode != "manual" {
 		return nil, fmt.Errorf("KUBE_NAT_MODE must be 'auto' or 'manual', got %q", cfg.Mode)

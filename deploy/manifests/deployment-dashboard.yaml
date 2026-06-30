@@ -40,6 +40,8 @@ spec:
         env:
         - name: POD_NAMESPACE
           value: kube-nat
+        - name: KUBE_NAT_SERVER_VERSION
+          value: latest
         ports:
         - name: http
           containerPort: 8080

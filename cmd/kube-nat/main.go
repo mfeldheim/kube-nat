@@ -60,6 +60,7 @@ func dashboardCmd() *cobra.Command {
 				Namespace:      cfg.Namespace,
 				MetricsPort:    cfg.MetricsPort,
 				ScrapeInterval: int(cfg.ScrapeInterval.Seconds()),
+				ServerVersion:  cfg.ServerVersion,
 			})
 			return srv.Run(cmd.Context(), fmt.Sprintf(":%d", cfg.DashboardPort))
 		},

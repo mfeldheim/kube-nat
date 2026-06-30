@@ -38,6 +38,8 @@ spec:
         env:
         - name: POD_NAMESPACE
           value: {{ .Values.namespace | quote }}
+        - name: KUBE_NAT_SERVER_VERSION
+          value: {{ .Values.image.tag | quote }}
         - name: KUBE_NAT_SCRAPE_INTERVAL
           value: {{ .Values.dashboard.scrapeInterval | quote }}
         - name: KUBE_NAT_DASHBOARD_PORT

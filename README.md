@@ -10,6 +10,11 @@ kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE Daemo
 
 ## Changelog
 
+### v0.1.18 (2026-06-30)
+
+- Dashboard now shows the running server version in the header next to Dashboard (for example: `Dashboard v0.1.27`).
+- Added `KUBE_NAT_SERVER_VERSION` wiring so dashboard snapshots include `server_version`, with Helm setting it from `image.tag`.
+
 ### v0.1.17 (2026-06-30)
 
 - AWS route updates now use explicit upsert semantics for `0.0.0.0/0`: the agent tries `CreateRoute` first and falls back to `ReplaceRoute` when the route already exists.

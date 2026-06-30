@@ -29,7 +29,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen px-4 sm:px-6 lg:px-8 py-6 space-y-6 max-w-7xl mx-auto">
-      <Header agents={snap.agents} />
+      <Header agents={snap.agents} serverVersion={snap.server_version} />
       <SummaryCards agents={snap.agents} failovers={snap.failovers} />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {snap.agents.map((a) => (

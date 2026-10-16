@@ -26,8 +26,7 @@ spec:
       nodeSelector:
         {{- toYaml .Values.agent.nodeSelector | nindent 8 }}
       tolerations:
-      - operator: Exists
-        effect: NoSchedule
+        {{- toYaml .Values.agent.tolerations | nindent 8 }}
       containers:
       - name: agent
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -45,6 +44,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         - name: POD_NAMESPACE
           value: {{ .Values.namespace | quote }}
         - name: KUBE_NAT_SERVER_VERSION
@@ -68,6 +71,14 @@ spec:
         {{- if .Values.agent.discovery }}
         - name: KUBE_NAT_DISCOVERY
           value: {{ .Values.agent.discovery | quote }}
+        {{- end }}
+        {{- if ne .Values.agent.standDownOnDrain nil }}
+        - name: KUBE_NAT_STAND_DOWN_ON_DRAIN
+          value: {{ .Values.agent.standDownOnDrain | quote }}
+        {{- end }}
+        {{- if .Values.agent.drainPollInterval }}
+        - name: KUBE_NAT_DRAIN_POLL_INTERVAL
+          value: {{ .Values.agent.drainPollInterval | quote }}
         {{- end }}
         ports:
         - name: metrics

@@ -24,6 +24,15 @@ type Config struct {
 	ScrapeInterval    time.Duration
 	DashboardPort     int
 	ServerVersion     string
+
+	// StandDownOnDrain makes the agent stop serving its AZ (release the AZ Lease
+	// and stop claiming the route table) while its node is draining — cordoned
+	// by a drain, or marked for disruption by the node provisioner. A DaemonSet
+	// is always scheduled onto cordoned nodes, so this is what keeps a draining
+	// node from competing with its own replacement for the AZ's route table.
+	StandDownOnDrain bool
+	// DrainPollInterval is how often the node's drain state is checked.
+	DrainPollInterval time.Duration
 }
 
 func Load() (*Config, error) {
@@ -44,6 +53,9 @@ func Load() (*Config, error) {
 		ScrapeInterval:    getDurationEnv("KUBE_NAT_SCRAPE_INTERVAL", 5*time.Second),
 		DashboardPort:     getIntEnv("KUBE_NAT_DASHBOARD_PORT", 8080),
 		ServerVersion:     getEnv("KUBE_NAT_SERVER_VERSION", "dev"),
+
+		StandDownOnDrain:  getBoolEnv("KUBE_NAT_STAND_DOWN_ON_DRAIN", true),
+		DrainPollInterval: getDurationEnv("KUBE_NAT_DRAIN_POLL_INTERVAL", 5*time.Second),
 	}
 	if cfg.Mode != "auto" && cfg.Mode != "manual" {
 		return nil, fmt.Errorf("KUBE_NAT_MODE must be 'auto' or 'manual', got %q", cfg.Mode)
@@ -53,6 +65,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ReconcileInterval <= 0 {
 		return nil, fmt.Errorf("KUBE_NAT_RECONCILE_INTERVAL must be positive, got %v", cfg.ReconcileInterval)
+	}
+	if cfg.DrainPollInterval <= 0 {
+		return nil, fmt.Errorf("KUBE_NAT_DRAIN_POLL_INTERVAL must be positive, got %v", cfg.DrainPollInterval)
 	}
 	return cfg, nil
 }
@@ -93,6 +108,15 @@ func getDurationEnv(key string, def time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return def
+}
+
+func getBoolEnv(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return def

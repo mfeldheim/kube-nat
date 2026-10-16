@@ -124,10 +124,18 @@ func Run(cfg *config.Config) error {
 	// 9. Data plane — iptables MASQUERADE + IP forwarding. No route table is
 	// claimed yet: the peer server (below) must be listening first, so peers
 	// never observe a route owned by an agent they cannot reach.
+	//
+	// Readiness is exactly "the data plane is applied": a NAT node is functional
+	// as soon as it masquerades. Whether this agent currently *serves* its AZ
+	// (holds the AZ Lease and points the route table at itself) is reported
+	// separately via kube_nat_standby and the ownership gauge — a standby agent
+	// is healthy and ready, it simply is not the one holding the route.
+	var ready atomic.Bool
 	logger.Printf("applying data plane (iptables + ip_forward)")
 	if err := rec.SetupDataPlane(); err != nil {
 		return fmt.Errorf("initial data plane setup: %w", err)
 	}
+	ready.Store(true)
 
 	// 10. Peer server — listen before claiming anything, so peers never observe
 	// a route owned by an agent they cannot reach. The peer subsystem has its
@@ -145,8 +153,7 @@ func Run(cfg *config.Config) error {
 
 	// 11. HTTP server: /metrics /healthz /readyz /claim /release. Started early
 	// (so /healthz answers during boot) but /readyz reports 503 until the data
-	// plane is applied and this AZ's route table is claimed.
-	var ready atomic.Bool
+	// plane is applied.
 	readyFn := func() error {
 		if !ready.Load() {
 			return fmt.Errorf("not ready")
@@ -173,27 +180,47 @@ func Run(cfg *config.Config) error {
 		}
 	}()
 
-	// 12. Claim our own AZ's route table. This is always safe: the target is
-	// this node's own instance ID, so it is identical no matter which pod of
-	// this AZ issues the write — the own-AZ claim can never flap against another
-	// agent. The data plane and peer server are already up, so peers never
-	// observe a route owned by an agent they cannot reach.
+	// 12. Stand-down monitor. A DaemonSet is always scheduled onto cordoned
+	// nodes, so "no agent on a draining node" cannot be a scheduling rule — the
+	// agent enforces it instead. While its node is draining it releases this
+	// AZ's Lease (so the replacement, or a peer, can take over immediately) and
+	// stops claiming the route table.
 	podName := podNameOrInstanceID(meta.InstanceID)
-	if err := rec.ClaimOwnRouteTables(ctx); err != nil {
-		logger.Printf("initial route table claim failed (will retry): %v", err)
-	} else {
-		ready.Store(true)
+	drainMon := NewDrainMonitor(k8sClient, cfg.Namespace, podName, cfg.DrainPollInterval, logger, func() {
+		relCtx, relCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer relCancel()
+		if err := leaseMgr.Release(relCtx, meta.AZ, podName); err != nil {
+			logger.Printf("drain stand-down: release own lease: %v", err)
+		}
+	})
+	if cfg.StandDownOnDrain {
+		if drainMon.Prime(ctx) {
+			logger.Printf("drain stand-down enabled (node=%s poll=%s)", drainMon.NodeName(), cfg.DrainPollInterval)
+		}
+		go drainMon.Run(ctx)
 	}
+	isDraining := func() bool { return cfg.StandDownOnDrain && drainMon.IsDraining() }
 
-	// 13. Establish our own AZ's Lease (best-effort; the lease loop maintains
-	// it). The Lease is the lock that lets a failover agent take over an AZ
-	// whose owner is truly gone, and lets us reclaim ours from a failover
-	// holder without stealing from a live owner.
-	if ok, err := leaseMgr.Acquire(ctx, meta.AZ, podName); err != nil {
-		logger.Printf("initial own lease acquire: %v", err)
-	} else if ok {
-		logger.Printf("acquired own lease az=%s", meta.AZ)
+	// 13. Serve our own AZ — but only while we hold its Lease. Two agents can
+	// legitimately share an AZ for a while (a draining node and its Karpenter
+	// replacement, or a rolling restart), so the own-AZ claim is Lease-gated:
+	// the holder serves, the other stands by until the holder goes away. Without
+	// the gate both would point the route table at themselves and flap it.
+	serving := false
+	if isDraining() {
+		logger.Printf("node is draining — not claiming own AZ route az=%s", meta.AZ)
+	} else {
+		s, err := serveOwnAZ(ctx, leaseMgr, rec, meta.AZ, podName, logger)
+		serving = s
+		if err != nil {
+			logger.Printf("initial own-AZ service: %v", err)
+		} else if s {
+			logger.Printf("serving own AZ az=%s", meta.AZ)
+		} else {
+			logger.Printf("own AZ lease held by another agent az=%s — standing by", meta.AZ)
+		}
 	}
+	reg.Standby.Set(boolToFloat(!serving))
 
 	// 14. Peer watcher — discovers other agents and monitors their health.
 	// Runs periodically so agents that start after us are still discovered.
@@ -201,7 +228,7 @@ func Run(cfg *config.Config) error {
 		peerMu      sync.Mutex
 		peerClients []*peer.Client
 	)
-	go startPeerWatcher(peerCtx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, rec, &peerMu, &peerClients)
+	go startPeerWatcher(peerCtx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, rec, isDraining, &peerMu, &peerClients)
 
 	// 15. Spot watcher — proactive step-down on interruption notice. It only
 	// cancels the context: the shutdown path releases Leases *before* telling
@@ -217,11 +244,9 @@ func Run(cfg *config.Config) error {
 	// Leases every LeaseRenewInterval (a fraction of LeaseDuration) so a healthy
 	// owner's Lease never spuriously expires and is never falsely stolen.
 	//
-	// Losing our own Lease does NOT make us stop serving our own AZ (the own-AZ
-	// route target is always this instance, so continuing is safe and correct);
-	// it just means a failover agent currently holds the lock, so we try to
-	// reclaim it. Losing a *failover* Lease means the AZ's real owner is back,
-	// so we yield that AZ's bookkeeping.
+	// While our node is draining we do no lease work at all: the stand-down
+	// already released our own Lease (so a replacement or peer can take over)
+	// and we must not re-create it.
 	go func() {
 		ticker := time.NewTicker(cfg.LeaseRenewInterval())
 		defer ticker.Stop()
@@ -230,16 +255,11 @@ func Run(cfg *config.Config) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				held, err := leaseMgr.Renew(ctx, meta.AZ, podName)
-				if err != nil {
-					logger.Printf("lease renew (own az) error: %v", err)
+				if isDraining() {
+					continue
 				}
-				if !held {
-					if ok, aerr := leaseMgr.Acquire(ctx, meta.AZ, podName); aerr != nil {
-						logger.Printf("re-acquire own lease az=%s: %v", meta.AZ, aerr)
-					} else if ok {
-						logger.Printf("reclaimed own lease az=%s from failover holder", meta.AZ)
-					}
+				if _, err := ensureOwnLease(ctx, leaseMgr, meta.AZ, podName, logger); err != nil {
+					logger.Printf("own lease renew error: %v", err)
 				}
 				// Keep failover Leases alive; yield any the original owner took back.
 				for _, az := range rec.ForeignAZs() {
@@ -259,10 +279,10 @@ func Run(cfg *config.Config) error {
 		}
 	}()
 
-	// 17. Reconciliation loop — re-applies the data plane and always re-asserts
-	// our own AZ's route table (its target is this instance, so it can never
-	// flap), releases failover tables the original owner reclaimed, and runs a
-	// last-resort sweep that covers any AZ whose Lease has expired.
+	// 17. Reconciliation loop — re-applies the data plane, re-asserts our own
+	// AZ's route table *while we hold its Lease*, releases failover tables the
+	// original owner reclaimed, and runs a last-resort sweep that covers any AZ
+	// whose Lease has expired.
 	go func() {
 		ticker := time.NewTicker(cfg.ReconcileInterval)
 		defer ticker.Stop()
@@ -277,12 +297,27 @@ func Run(cfg *config.Config) error {
 					ready.Store(false)
 					continue
 				}
-				if err := rec.ClaimOwnRouteTables(ctx); err != nil {
-					logger.Printf("own route table reconcile error: %v", err)
-					ready.Store(false)
+				ready.Store(true)
+
+				// Serve our own AZ only while we hold its Lease and our node is
+				// not draining; any other agent in this AZ is a standby.
+				serving := false
+				if isDraining() {
+					logger.Printf("node is draining — standing down: not claiming own AZ route az=%s", meta.AZ)
 				} else {
-					ready.Store(true)
+					s, err := serveOwnAZ(ctx, leaseMgr, rec, meta.AZ, podName, logger)
+					serving = s
+					if err != nil {
+						logger.Printf("own AZ service error: %v", err)
+					}
 				}
+				if !serving {
+					for _, rtbID := range rec.DropOwnTables() {
+						reg.RouteTableOwned.WithLabelValues(rtbID).Set(0)
+					}
+				}
+				reg.Standby.Set(boolToFloat(!serving))
+
 				// Detect when original owners reclaim their route tables.
 				if vacated, err := rec.ReconcileForeign(ctx); err != nil {
 					logger.Printf("reconcile foreign error: %v", err)
@@ -292,16 +327,19 @@ func Run(cfg *config.Config) error {
 					}
 				}
 				// Last-resort catch-all: cover any AZ whose Lease has expired and
-				// that we are not already covering.
-				if expired, err := leaseMgr.ListExpiredAZs(ctx, meta.AZ); err != nil {
-					logger.Printf("list expired leases: %v", err)
-				} else {
-					for _, az := range expired {
-						if rec.CoversAZ(az) {
-							continue
+				// that we are not already covering. A draining node takes on no
+				// new failover work.
+				if !isDraining() {
+					if expired, err := leaseMgr.ListExpiredAZs(ctx, meta.AZ); err != nil {
+						logger.Printf("list expired leases: %v", err)
+					} else {
+						for _, az := range expired {
+							if rec.CoversAZ(az) {
+								continue
+							}
+							logger.Printf("lease for az=%s expired — attempting takeover", az)
+							takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec, isDraining)
 						}
-						logger.Printf("lease for az=%s expired — attempting takeover", az)
-						takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
 					}
 				}
 				updateMetrics(reg, meta, natMgr, rec)
@@ -418,7 +456,7 @@ func Run(cfg *config.Config) error {
 func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kubernetes.Interface,
 	leaseMgr *lease.Manager, ec2Client kubenataws.EC2Client,
 	meta *kubenataws.InstanceMetadata, reg *metrics.Registry, logger *log.Logger,
-	rec *reconciler.Reconciler, mu *sync.Mutex, clients *[]*peer.Client) {
+	rec *reconciler.Reconciler, isDraining func() bool, mu *sync.Mutex, clients *[]*peer.Client) {
 
 	var azMu sync.Mutex
 	connectedAZs := make(map[string]bool)
@@ -473,7 +511,7 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 					delete(connectedAZs, az)
 					staleInstances[az] = peerInstanceID
 					azMu.Unlock()
-					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
+					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec, isDraining)
 				},
 				OnStepDown: func(az string) {
 					logger.Printf("peer %s stepping down — taking over", az)
@@ -481,7 +519,7 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 					delete(connectedAZs, az)
 					staleInstances[az] = peerInstanceID
 					azMu.Unlock()
-					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
+					takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec, isDraining)
 				},
 			})
 			mu.Lock()
@@ -507,7 +545,13 @@ func startPeerWatcher(ctx context.Context, cfg *config.Config, k8sClient kuberne
 
 func takeover(ctx context.Context, cfg *config.Config, leaseMgr *lease.Manager,
 	ec2Client kubenataws.EC2Client, meta *kubenataws.InstanceMetadata,
-	reg *metrics.Registry, logger *log.Logger, deadAZ string, rec *reconciler.Reconciler) {
+	reg *metrics.Registry, logger *log.Logger, deadAZ string, rec *reconciler.Reconciler,
+	isDraining func() bool) {
+
+	if isDraining != nil && isDraining() {
+		logger.Printf("takeover %s: skipping — this node is draining", deadAZ)
+		return
+	}
 
 	podName := podNameOrInstanceID(meta.InstanceID)
 	acquired, err := leaseMgr.Acquire(ctx, deadAZ, podName)
@@ -581,4 +625,57 @@ func podNameOrInstanceID(instanceID string) string {
 		return n
 	}
 	return instanceID
+}
+
+// serveOwnAZ makes this agent serve its own AZ: it holds the AZ's Lease and,
+// while holding it, points the AZ's route table at this instance. The own-AZ
+// claim is gated on the Lease so that two agents in the same AZ can never fight
+// over the route table — the holder serves, the other stands by until the holder
+// goes away (releases the Lease or lets it expire). Returns whether this agent is
+// serving the AZ.
+//
+// A claim error still reports serving=true: we hold the Lease, so we will retry
+// the claim on the next reconcile tick rather than hand the AZ to a standby.
+func serveOwnAZ(ctx context.Context, leaseMgr *lease.Manager, rec *reconciler.Reconciler,
+	az, podName string, logger *log.Logger) (bool, error) {
+
+	held, err := ensureOwnLease(ctx, leaseMgr, az, podName, logger)
+	if err != nil {
+		return false, err
+	}
+	if !held {
+		return false, nil
+	}
+	if err := rec.ClaimOwnRouteTables(ctx); err != nil {
+		return true, fmt.Errorf("claim own route tables az=%s: %w", az, err)
+	}
+	return true, nil
+}
+
+// ensureOwnLease renews this AZ's Lease, or acquires it when it is free, and
+// reports whether this agent now holds it. A live Lease held by another agent —
+// including another agent in this same AZ — is never stolen.
+func ensureOwnLease(ctx context.Context, leaseMgr *lease.Manager, az, podName string, logger *log.Logger) (bool, error) {
+	held, err := leaseMgr.Renew(ctx, az, podName)
+	if err != nil {
+		logger.Printf("own lease renew error az=%s: %v", az, err)
+	}
+	if held {
+		return true, nil
+	}
+	ok, aerr := leaseMgr.Acquire(ctx, az, podName)
+	if aerr != nil {
+		return false, fmt.Errorf("acquire own lease az=%s: %w", az, aerr)
+	}
+	if ok {
+		logger.Printf("acquired own lease az=%s", az)
+	}
+	return ok, nil
+}
+
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }

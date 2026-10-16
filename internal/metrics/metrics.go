@@ -20,6 +20,12 @@ type Registry struct {
 	RouteTableOwned     *prometheus.GaugeVec
 	FallbackAvailable   prometheus.Gauge
 
+	// Standby is 1 while this agent is not serving its own AZ — either another
+	// agent in the same AZ holds the AZ Lease, or this node is draining. A
+	// standby agent keeps its data plane up and takes over the moment the
+	// serving agent goes away.
+	Standby prometheus.Gauge
+
 	PeerStatus    *prometheus.GaugeVec
 	FailoverTotal *prometheus.CounterVec
 	LastFailover  *prometheus.GaugeVec
@@ -80,6 +86,10 @@ func NewRegistry() *Registry {
 		Name: "kube_nat_fallback_available",
 		Help: "1 if all currently owned route tables have a known NAT gateway fallback target",
 	})
+	m.Standby = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_nat_standby",
+		Help: "1 while this agent is not serving its own AZ (another agent holds the AZ Lease, or the node is draining)",
+	})
 	m.PeerStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kube_nat_peer_status", Help: "1=peer up, 0=peer down",
 	}, []string{"az", "instance_id"})
@@ -125,6 +135,7 @@ func NewRegistry() *Registry {
 		m.BytesTX, m.BytesRX, m.PacketsTX, m.PacketsRX,
 		m.ConntrackEntries, m.ConntrackMax, m.ConntrackUsageRatio,
 		m.RulePresent, m.SrcDstCheckDisabled, m.RouteTableOwned, m.FallbackAvailable,
+		m.Standby,
 		m.PeerStatus, m.FailoverTotal, m.LastFailover,
 		m.SpotInterruptionPending, m.MaxBandwidthBps,
 		m.TxBytesPerSec, m.RxBytesPerSec,

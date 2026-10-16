@@ -13,7 +13,16 @@ agent:
   discovery: ""            # when set, filters route tables by kube-nat/discovery=<value> (multi-VPC safe)
   leaseDuration: ""        # KUBE_NAT_LEASE_DURATION, e.g. "30s" (empty = agent default)
   reconcileInterval: ""    # KUBE_NAT_RECONCILE_INTERVAL, e.g. "30s" (empty = agent default)
+  standDownOnDrain: true   # KUBE_NAT_STAND_DOWN_ON_DRAIN: a draining node's agent releases its AZ lease and stops claiming routes
+  drainPollInterval: ""    # KUBE_NAT_DRAIN_POLL_INTERVAL, e.g. "5s" (empty = agent default)
   nodeSelector: {}  # override in your values file; no default to avoid merge conflicts
+  # Tolerations for the NAT node taint. The DaemonSet controller always adds the
+  # standard node-condition tolerations (not-ready, unreachable, *-pressure,
+  # unschedulable, network-unavailable) on top of these.
+  tolerations:
+    - key: node-role.kubernetes.io/nat
+      operator: Exists
+      effect: NoSchedule
   resources:
     requests:
       cpu: 50m

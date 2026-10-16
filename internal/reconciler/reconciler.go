@@ -58,6 +58,19 @@ func (r *Reconciler) OwnedTables() []string {
 	return out
 }
 
+// DropOwnTables forgets the route tables this agent last claimed for its own AZ
+// and returns them so callers can clear their ownership gauge. It does not touch
+// AWS. Used when this agent stops serving its own AZ — the AZ Lease is held by
+// another agent, or this node is draining — so the bookkeeping (and the
+// ownership metrics) reflect that a different agent owns them now.
+func (r *Reconciler) DropOwnTables() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	owned := r.ownedTables
+	r.ownedTables = nil
+	return owned
+}
+
 // CanFallbackToNAT reports whether every currently owned route table has a known
 // NAT gateway target that ReleaseRouteTables can restore traffic to.
 func (r *Reconciler) CanFallbackToNAT() bool {

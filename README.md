@@ -10,6 +10,13 @@ kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE Daemo
 
 ## Changelog
 
+### v0.1.20 (2026-10-16)
+
+- **Route-table flapping on NAT-node replacement fixed.** The own-AZ route claim is now gated on the AZ's Lease, so when two agents briefly share an AZ — a draining NAT node and its replacement (e.g. Karpenter), or a rolling restart — only the Lease holder points the route table at itself. Previously both agents re-claimed the route every reconcile tick, so `0.0.0.0/0` flapped between the old and new instance.
+- **A draining node's agent now stands down.** When an agent's node is cordoned or marked for disruption, the agent releases its AZ Lease and stops claiming the route table, so the replacement (or a peer) takes over instead of competing. A DaemonSet is always scheduled onto cordoned nodes (the controller force-adds a `node.kubernetes.io/unschedulable` toleration), so this is enforced by the agent itself rather than by a scheduling rule. Configurable via `agent.standDownOnDrain` / `KUBE_NAT_STAND_DOWN_ON_DRAIN` (default on).
+- Agent tolerations are now explicit (`node-role.kubernetes.io/nat`) instead of a blanket `operator: Exists` `NoSchedule` toleration; the DaemonSet controller still adds the standard node-condition tolerations.
+- `/readyz` now reports the data plane only (masquerade + forwarding). Whether an agent currently *serves* its AZ is reported separately by the new `kube_nat_standby` gauge and `kube_nat_route_table_owned`.
+
 ### v0.1.18 (2026-06-30)
 
 - Dashboard now shows the running server version in the header next to Dashboard (for example: `Dashboard v0.1.27`).
@@ -68,12 +75,13 @@ _kube-nat cost shown using spot t3.small instances — on-demand works too. Data
 
 Each kube-nat agent:
 
-1. **Owns its AZ.** The agent runs on the NAT instance in its AZ and always points that AZ's route table at itself, so the own-AZ route can never flap between agents.
-2. **Coordinates through a Kubernetes Lease** (`coordination.k8s.io/v1`), one per AZ, recording the holder and the holder's home AZ. The Lease gates *failover*: a surviving agent may only claim a failed AZ's route table once that AZ's Lease is absent or expired, and a returning owner always preempts a failover holder.
+1. **Owns its AZ.** The agent runs on the NAT instance in its AZ and points that AZ's route table at itself — but only while it holds that AZ's **Lease**. If two agents ever share an AZ (a draining node and its replacement, or a rolling restart), the Lease holder serves and the other stands by, so the own-AZ route can never flap between them.
+2. **Coordinates through a Kubernetes Lease** (`coordination.k8s.io/v1`), one per AZ, recording the holder and the holder's home AZ. The same Lease both picks the single serving agent per AZ and gates *failover*: a surviving agent may only claim a failed AZ's route table once that AZ's Lease is absent or expired, and a returning owner always preempts a failover holder.
 3. **Programs iptables** with a `MASQUERADE` rule on the host network interface so pod traffic SNATs to the instance's EIP.
 4. **Manages EC2 route tables** (in `auto` mode) to insert a `0.0.0.0/0` route via the instance ENI into all subnets in its AZ.
 5. **Broadcasts TCP heartbeats** every 200ms to peer agents. Two missed beats (~400ms) trigger a takeover *attempt*, which only succeeds if the failed AZ's Lease is absent or expired — so a healthy-but-slow agent is never stolen from.
 6. **Watches for spot interruption notices** via the EC2 instance metadata service. On a two-minute notice (or SIGTERM) the agent gracefully steps down: it releases the AZ's Lease first, then tells its peers to take over, so a peer acquires the Lease and claims the route immediately instead of waiting for it to expire.
+7. **Stands down when its node drains.** If its node is cordoned or marked for disruption (e.g. by Karpenter before a replacement), the agent releases its AZ's Lease and stops claiming the route table, so the replacement or a peer takes over cleanly.
 
 ### Failover layers
 
@@ -81,6 +89,7 @@ Each kube-nat agent:
 |---|---|---|
 | Spot notice watcher | EC2 metadata `/spot/termination-time` polled every 5s | graceful step-down; Lease released ~immediately |
 | SIGTERM handler | node drain / pod eviction | graceful step-down; Lease released ~immediately |
+| Node-drain watcher | node cordoned or marked for disruption (polled every 5s) | stand-down; Lease released ~immediately, route claims stop |
 | TCP peer heartbeat | 2 missed beats × 200ms interval | takeover attempt (~400ms); succeeds once the peer's Lease is absent/expired |
 
 A graceful step-down fails over in about a second. An ungraceful failure (crash, hard termination) fails over within `KUBE_NAT_LEASE_DURATION`, when the dead owner's Lease expires.
@@ -187,8 +196,13 @@ agent:
   mode: auto                               # "auto" = manage EC2 routes; "manual" = iptables only
   conntrackMax: ""                         # override nf_conntrack_max (empty = kernel default)
   tagPrefix: kube-nat                      # prefix for EC2 resource tags
+  standDownOnDrain: true                   # a draining node's agent releases its AZ lease and stops claiming routes
   nodeSelector:
     node-role.kubernetes.io/nat: "true"    # nodes where agents are scheduled
+  tolerations:                             # NAT node taint (the DaemonSet controller adds the rest)
+    - key: node-role.kubernetes.io/nat
+      operator: Exists
+      effect: NoSchedule
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits:   {cpu: 200m, memory: 128Mi}
@@ -219,6 +233,8 @@ All agent configuration is also available as environment variables (Helm injects
 | `KUBE_NAT_PROBE_INTERVAL` | `200ms` | TCP heartbeat interval between peer agents |
 | `KUBE_NAT_PROBE_FAILURES` | `2` | Missed heartbeats before a takeover **attempt** (the attempt still requires the peer's Lease to be absent or expired) |
 | `KUBE_NAT_RECONCILE_INTERVAL` | `30s` | How often to reconcile iptables and routes, retry failed takeovers, and sweep for expired Leases |
+| `KUBE_NAT_STAND_DOWN_ON_DRAIN` | `true` | Stand down (release the AZ Lease, stop claiming routes) while the node is cordoned or marked for disruption |
+| `KUBE_NAT_DRAIN_POLL_INTERVAL` | `5s` | How often the node's drain state is checked |
 | `KUBE_NAT_METRICS_PORT` | `9100` | Port for Prometheus metrics and health endpoints |
 | `KUBE_NAT_PEER_PORT` | `9101` | Port for inter-agent TCP heartbeats |
 | `KUBE_NAT_AZ_LABEL` | `topology.kubernetes.io/zone` | Node label used to determine the agent's AZ |
@@ -245,6 +261,7 @@ All metrics are exposed on `:9100/metrics` by each agent pod.
 | `kube_nat_conntrack_entries` | Gauge | Current conntrack table entries |
 | `kube_nat_conntrack_max` | Gauge | Maximum conntrack table capacity |
 | `kube_nat_route_tables_owned` | Gauge | Number of EC2 route tables currently managed |
+| `kube_nat_standby` | Gauge | 1 while this agent is not serving its own AZ (another agent holds the AZ Lease, or the node is draining) |
 | `kube_nat_peer_up` | Gauge | 1 if TCP peer heartbeat is healthy, 0 otherwise |
 | `kube_nat_spot_pending` | Gauge | 1 if a spot termination notice has been received |
 | `kube_nat_rule_present` | Gauge | 1 if the iptables MASQUERADE rule is in place |
@@ -259,7 +276,9 @@ Each agent exposes two HTTP endpoints on `KUBE_NAT_METRICS_PORT`:
 | Path | Ready when |
 |---|---|
 | `/healthz` | Process is alive |
-| `/readyz` | Data plane (masquerade + forwarding) is applied AND this AZ's route table is claimed |
+| `/readyz` | The data plane (masquerade + forwarding) is applied |
+
+`/readyz` deliberately does not depend on route ownership: a standby agent (one that is not currently holding its AZ's Lease) is healthy and ready, and keeping readiness independent of the Lease avoids stalling a DaemonSet rollout when two agents briefly share an AZ. Use `kube_nat_standby` and `kube_nat_route_table_owned` to see which agent is serving.
 
 ---
 
@@ -506,8 +525,21 @@ Rule of thumb: allocate ~300 bytes per conntrack entry. A t3.medium (4 GB RAM) c
 
 ---
 
-### Failover is slow
+### Two agents in one AZ
 
+When a NAT node is replaced (e.g. Karpenter brings up a replacement while the old node is still draining), two agents can briefly share an AZ. This is supported: only the agent holding the AZ's Lease claims the AZ's route table, and a draining node's agent stands down on its own. Check which agent is serving:
+
+```bash
+kubectl get leases -n kube-nat                                   # holderIdentity per AZ
+kubectl get --raw /api/v1/namespaces/kube-nat/pods/<agent-pod>:9100/proxy/metrics | grep kube_nat_standby
+# kube_nat_standby=1 means this agent is standing by, not the one serving its AZ
+```
+
+If you see `0.0.0.0/0` flapping between two instance IDs, the two agents are both claiming — check that `KUBE_NAT_STAND_DOWN_ON_DRAIN` is not disabled and that the agents are the same version.
+
+---
+
+### Failover is slow
 Detection is fast (`KUBE_NAT_PROBE_INTERVAL` × `KUBE_NAT_PROBE_FAILURES` = 200ms × 2 = 400ms by default), but a takeover only succeeds once the failed AZ's Lease is absent or expired. So:
 
 - **Graceful step-down** (spot notice or SIGTERM) releases the Lease immediately — expect failover in about a second.

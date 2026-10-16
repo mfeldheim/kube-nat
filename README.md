@@ -10,6 +10,10 @@ kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE Daemo
 
 ## Changelog
 
+### v0.1.21 (2026-10-16)
+
+- `Renew` now retries on a resourceVersion conflict instead of reporting that the agent lost its own Lease, so an agent's lease loop and reconcile loop refreshing the same Lease at the same moment no longer logs a misleading "acquired own lease" on every reconcile tick. A conflict that reveals a different holder is still treated as a loss (renewal never steals).
+
 ### v0.1.20 (2026-10-16)
 
 - **Route-table flapping on NAT-node replacement fixed.** The own-AZ route claim is now gated on the AZ's Lease, so when two agents briefly share an AZ — a draining NAT node and its replacement (e.g. Karpenter), or a rolling restart — only the Lease holder points the route table at itself. Previously both agents re-claimed the route every reconcile tick, so `0.0.0.0/0` flapped between the old and new instance.

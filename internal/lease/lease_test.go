@@ -2,12 +2,18 @@ package lease_test
 
 import (
 	"context"
+	stderrors "errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kube-nat/kube-nat/internal/lease"
 )
@@ -253,3 +259,79 @@ func TestListExpiredAZs(t *testing.T) {
 }
 
 func int32Ptr(i int32) *int32 { return &i }
+
+// TestRenewRetriesOnConflict covers the lease loop and the reconcile loop both
+// refreshing the same Lease at once: the loser's Update is rejected with a
+// resourceVersion conflict, and Renew must re-read rather than report that it
+// lost ownership of its own Lease.
+func TestRenewRetriesOnConflict(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset()
+	mgr := lease.NewManager(client, ns, 30*time.Second, "eu-west-1a")
+
+	if ok, err := mgr.Renew(ctx, "eu-west-1a", "pod-1a"); err != nil || !ok {
+		t.Fatalf("initial renew: ok=%v err=%v", ok, err)
+	}
+
+	// Fail the first Lease update with a conflict, as a concurrent writer would.
+	var updates int32
+	client.PrependReactor("update", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if atomic.AddInt32(&updates, 1) == 1 {
+			return true, nil, apierrors.NewConflict(
+				schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"},
+				"kube-nat-eu-west-1a", stderrors.New("the object has been modified"))
+		}
+		return false, nil, nil
+	})
+
+	ok, err := mgr.Renew(ctx, "eu-west-1a", "pod-1a")
+	if err != nil {
+		t.Fatalf("renew after conflict: %v", err)
+	}
+	if !ok {
+		t.Fatal("Renew must retry after a conflict and report that we still hold our own Lease")
+	}
+	if updates != 2 {
+		t.Fatalf("want 2 update attempts (conflict then success), got %d", updates)
+	}
+}
+
+// TestRenewConflictWithAnotherHolderIsALoss verifies the retry never steals: if
+// the re-read shows a different holder, Renew reports the loss.
+func TestRenewConflictWithAnotherHolderIsALoss(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset()
+	mgr := lease.NewManager(client, ns, 30*time.Second, "eu-west-1a")
+
+	if ok, err := mgr.Renew(ctx, "eu-west-1a", "pod-1a"); err != nil || !ok {
+		t.Fatalf("initial renew: ok=%v err=%v", ok, err)
+	}
+
+	// A conflicting update, after which the Lease belongs to someone else.
+	client.PrependReactor("update", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(
+			schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"},
+			"kube-nat-eu-west-1a", stderrors.New("the object has been modified"))
+	})
+	client.PrependReactor("get", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		other := "pod-other"
+		ren := metav1.NewMicroTime(time.Now())
+		secs := int32(30)
+		return true, &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: "kube-nat-eu-west-1a", Namespace: ns},
+			Spec: coordinationv1.LeaseSpec{
+				HolderIdentity:       &other,
+				RenewTime:            &ren,
+				LeaseDurationSeconds: &secs,
+			},
+		}, nil
+	})
+
+	ok, err := mgr.Renew(ctx, "eu-west-1a", "pod-1a")
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if ok {
+		t.Fatal("Renew must not claim the Lease when the re-read shows another holder")
+	}
+}

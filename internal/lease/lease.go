@@ -63,18 +63,38 @@ func (m *Manager) Renew(ctx context.Context, az, holderID string) (bool, error) 
 		return false, nil
 	}
 
-	existing.Spec.RenewTime = &now
-	existing.Spec.LeaseDurationSeconds = &durSecs
-	setHomeAZ(existing, m.homeAZ)
-	if _, err := m.client.CoordinationV1().Leases(m.namespace).
-		Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-		if errors.IsConflict(err) {
-			// Someone else updated the Lease first — clean loss.
+	// Refresh the TTL. A resourceVersion conflict means another writer updated
+	// the Lease first — commonly this same agent's other loop (the lease loop
+	// and the reconcile loop can tick together). Re-read and retry while the
+	// Lease is still ours, so a concurrent refresh of our own Lease is not
+	// misreported as losing it. A conflict that reveals a different holder is a
+	// genuine loss: never steal on a renew.
+	for attempt := 0; attempt < 3; attempt++ {
+		existing.Spec.RenewTime = &now
+		existing.Spec.LeaseDurationSeconds = &durSecs
+		setHomeAZ(existing, m.homeAZ)
+		_, uerr := m.client.CoordinationV1().Leases(m.namespace).
+			Update(ctx, existing, metav1.UpdateOptions{})
+		if uerr == nil {
+			return true, nil
+		}
+		if !errors.IsConflict(uerr) {
+			return false, uerr
+		}
+		latest, gerr := m.client.CoordinationV1().Leases(m.namespace).
+			Get(ctx, name, metav1.GetOptions{})
+		if errors.IsNotFound(gerr) {
 			return false, nil
 		}
-		return false, err
+		if gerr != nil {
+			return false, fmt.Errorf("get lease %s: %w", name, gerr)
+		}
+		if latest.Spec.HolderIdentity == nil || *latest.Spec.HolderIdentity != holderID {
+			return false, nil
+		}
+		existing = latest
 	}
-	return true, nil
+	return false, nil
 }
 
 // Acquire takes the Lease for az when it is absent, expired, or currently held

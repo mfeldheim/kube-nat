@@ -42,7 +42,7 @@ export default function App() {
       <BandwidthChart history={snap.history} />
       <EventLog events={snap.events ?? []} />
       <footer className="flex flex-col gap-2 border-t border-white/5 pt-5 text-xs text-gray-400 sm:flex-row sm:items-center sm:justify-between">
-        <div>Copyright © 2026 kube-nat</div>
+        <div>Copyright © 2026 Michel Feldheim</div>
         <div className="flex items-center gap-4">
           <a href={DOCS_URL} target="_blank" rel="noreferrer" className="transition-colors hover:text-sky-300">
             Docs

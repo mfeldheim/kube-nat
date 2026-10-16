@@ -4,6 +4,8 @@
 
 # kube-nat
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE DaemonSet on EC2 worker nodes. Pods on private subnets reach the internet through the kube-nat agent in their availability zone, which performs SNAT via the instance's existing Elastic IP — no NAT Gateway required.
 
 ---
@@ -617,3 +619,11 @@ Supported platforms: `linux/amd64`, `linux/arm64` (Graviton).
 ```bash
 docker pull ghcr.io/mfeldheim/kube-nat:latest
 ```
+
+---
+
+## License
+
+Licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Copyright 2026 Michel Feldheim.

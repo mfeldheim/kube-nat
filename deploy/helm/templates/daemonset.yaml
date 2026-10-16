@@ -53,6 +53,14 @@ spec:
           value: {{ .Values.agent.mode | quote }}
         - name: KUBE_NAT_TAG_PREFIX
           value: {{ .Values.agent.tagPrefix | quote }}
+        {{- if .Values.agent.leaseDuration }}
+        - name: KUBE_NAT_LEASE_DURATION
+          value: {{ .Values.agent.leaseDuration | quote }}
+        {{- end }}
+        {{- if .Values.agent.reconcileInterval }}
+        - name: KUBE_NAT_RECONCILE_INTERVAL
+          value: {{ .Values.agent.reconcileInterval | quote }}
+        {{- end }}
         {{- if .Values.agent.conntrackMax }}
         - name: KUBE_NAT_CONNTRACK_MAX
           value: {{ .Values.agent.conntrackMax | quote }}

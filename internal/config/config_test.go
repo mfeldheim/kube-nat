@@ -31,6 +31,39 @@ func TestDefaults(t *testing.T) {
 	if cfg.TagPrefix != "kube-nat" {
 		t.Errorf("want TagPrefix=kube-nat got %s", cfg.TagPrefix)
 	}
+	if cfg.LeaseDuration != 30*time.Second {
+		t.Errorf("want LeaseDuration=30s got %v", cfg.LeaseDuration)
+	}
+	if cfg.ReconcileInterval != 30*time.Second {
+		t.Errorf("want ReconcileInterval=30s got %v", cfg.ReconcileInterval)
+	}
+}
+
+func TestLeaseRenewInterval(t *testing.T) {
+	// Defaults: 30s lease -> renew every 7.5s (well within the lease).
+	def, _ := config.Load()
+	if got, want := def.LeaseRenewInterval(), 7500*time.Millisecond; got != want {
+		t.Errorf("default renew interval: want %v got %v", want, got)
+	}
+
+	// Capped at ReconcileInterval.
+	c := &config.Config{LeaseDuration: 8 * time.Second, ReconcileInterval: 1 * time.Second}
+	if got, want := c.LeaseRenewInterval(), time.Second; got != want {
+		t.Errorf("cap at reconcile interval: want %v got %v", want, got)
+	}
+
+	// Floor of 1s for tiny lease durations.
+	c = &config.Config{LeaseDuration: 2 * time.Second, ReconcileInterval: 30 * time.Second}
+	if got, want := c.LeaseRenewInterval(), time.Second; got != want {
+		t.Errorf("floor: want %v got %v", want, got)
+	}
+}
+
+func TestInvalidLeaseDuration(t *testing.T) {
+	t.Setenv("KUBE_NAT_LEASE_DURATION", "0s")
+	if _, err := config.Load(); err == nil {
+		t.Error("want error for non-positive lease duration")
+	}
 }
 
 func TestManualMode(t *testing.T) {

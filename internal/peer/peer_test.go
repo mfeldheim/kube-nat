@@ -121,3 +121,40 @@ func TestStepDownSignal(t *testing.T) {
 		// Acceptable: step-down via connection close is best-effort
 	}
 }
+
+// TestSendStepDownConcurrentWithConnect hammers SendStepDown while Connect is
+// (re)establishing connections. It must be race-free (run with -race) and must
+// never panic on a nil or half-open connection. This is the path the agent uses
+// to broadcast a graceful step-down during shutdown.
+func TestSendStepDownConcurrentWithConnect(t *testing.T) {
+	srv := peer.NewServer(":0")
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Serve(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	c := peer.NewClient("eu-west-1b", peer.ClientConfig{
+		ProbeInterval: 20 * time.Millisecond,
+		ProbeFailures: 3,
+	})
+
+	// Before Connect there is no connection: must be a safe no-op.
+	c.SendStepDown()
+
+	go c.Connect(ctx, srv.Addr())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			c.SendStepDown()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	<-done
+}

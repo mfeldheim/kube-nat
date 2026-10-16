@@ -30,7 +30,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Mode:              getEnv("KUBE_NAT_MODE", "auto"),
 		AZLabel:           getEnv("KUBE_NAT_AZ_LABEL", "topology.kubernetes.io/zone"),
-		LeaseDuration:     getDurationEnv("KUBE_NAT_LEASE_DURATION", 15*time.Second),
+		LeaseDuration:     getDurationEnv("KUBE_NAT_LEASE_DURATION", 30*time.Second),
 		ProbeInterval:     getDurationEnv("KUBE_NAT_PROBE_INTERVAL", 200*time.Millisecond),
 		ProbeFailures:     getIntEnv("KUBE_NAT_PROBE_FAILURES", 2),
 		ReconcileInterval: getDurationEnv("KUBE_NAT_RECONCILE_INTERVAL", 30*time.Second),
@@ -48,7 +48,29 @@ func Load() (*Config, error) {
 	if cfg.Mode != "auto" && cfg.Mode != "manual" {
 		return nil, fmt.Errorf("KUBE_NAT_MODE must be 'auto' or 'manual', got %q", cfg.Mode)
 	}
+	if cfg.LeaseDuration <= 0 {
+		return nil, fmt.Errorf("KUBE_NAT_LEASE_DURATION must be positive, got %v", cfg.LeaseDuration)
+	}
+	if cfg.ReconcileInterval <= 0 {
+		return nil, fmt.Errorf("KUBE_NAT_RECONCILE_INTERVAL must be positive, got %v", cfg.ReconcileInterval)
+	}
 	return cfg, nil
+}
+
+// LeaseRenewInterval is how often the agent renews its Leases. It is derived so
+// that the renewal happens several times within LeaseDuration — a healthy
+// owner's Lease therefore never spuriously expires, which is what made peers
+// steal healthy AZs before. It is also capped at ReconcileInterval so the
+// renewal loop is at least as frequent as the reconcile loop.
+func (c *Config) LeaseRenewInterval() time.Duration {
+	d := c.LeaseDuration / 4
+	if d < time.Second {
+		d = time.Second
+	}
+	if c.ReconcileInterval > 0 && d > c.ReconcileInterval {
+		d = c.ReconcileInterval
+	}
+	return d
 }
 
 func getEnv(key, def string) string {

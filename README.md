@@ -49,7 +49,7 @@ _kube-nat cost shown using spot t3.small instances — on-demand works too. Data
 - **No cross-AZ data transfer charges.** Traffic stays within the AZ — the kube-nat agent is always co-located with the pods it serves.
 - **Observability.** NAT Gateway gives you CloudWatch metrics with 1-minute granularity. kube-nat exposes per-agent Prometheus metrics and a real-time dashboard with 5-second resolution.
 - **No AWS service limits.** NAT Gateway has a fixed 100 Gbps bandwidth cap per gateway. kube-nat throughput scales with the instance type you choose.
-- **Spot-safe.** The three-layer failover mechanism (spot notice → SIGTERM → TCP heartbeat) ensures traffic resumes within 400ms of a spot interruption.
+- **Spot-safe.** Failover is coordinated by a per-AZ Kubernetes Lease. A graceful step-down (spot notice → SIGTERM → TCP heartbeat) releases the lease first, so a peer takes over within about a second; an ungraceful failure fails over once the lease expires (`KUBE_NAT_LEASE_DURATION`).
 
 ---
 
@@ -68,19 +68,22 @@ _kube-nat cost shown using spot t3.small instances — on-demand works too. Data
 
 Each kube-nat agent:
 
-1. **Owns its AZ** by holding a Kubernetes Lease (`coordination.k8s.io/v1`). One agent per AZ is active at any time.
-2. **Programs iptables** with a `MASQUERADE` rule on the host network interface so pod traffic SNATs to the instance's EIP.
-3. **Manages EC2 route tables** (in `auto` mode) to insert a `0.0.0.0/0` route via the instance ENI into all subnets in its AZ.
-4. **Broadcasts TCP heartbeats** every 200ms to peer agents. If a peer misses 2 consecutive beats (~400ms), the surviving agent initiates takeover.
-5. **Watches for spot interruption notices** via the EC2 instance metadata service. On a two-minute notice, the agent gracefully steps down — releases the lease, removes iptables rules, withdraws the route — so the next agent can take over cleanly.
+1. **Owns its AZ.** The agent runs on the NAT instance in its AZ and always points that AZ's route table at itself, so the own-AZ route can never flap between agents.
+2. **Coordinates through a Kubernetes Lease** (`coordination.k8s.io/v1`), one per AZ, recording the holder and the holder's home AZ. The Lease gates *failover*: a surviving agent may only claim a failed AZ's route table once that AZ's Lease is absent or expired, and a returning owner always preempts a failover holder.
+3. **Programs iptables** with a `MASQUERADE` rule on the host network interface so pod traffic SNATs to the instance's EIP.
+4. **Manages EC2 route tables** (in `auto` mode) to insert a `0.0.0.0/0` route via the instance ENI into all subnets in its AZ.
+5. **Broadcasts TCP heartbeats** every 200ms to peer agents. Two missed beats (~400ms) trigger a takeover *attempt*, which only succeeds if the failed AZ's Lease is absent or expired — so a healthy-but-slow agent is never stolen from.
+6. **Watches for spot interruption notices** via the EC2 instance metadata service. On a two-minute notice (or SIGTERM) the agent gracefully steps down: it releases the AZ's Lease first, then tells its peers to take over, so a peer acquires the Lease and claims the route immediately instead of waiting for it to expire.
 
 ### Failover layers
 
-| Layer | Trigger | Latency |
+| Layer | Trigger | Effect |
 |---|---|---|
-| Spot notice watcher | EC2 metadata `/spot/termination-time` polled every 5s | ~100ms after notice |
-| SIGTERM handler | node drain / pod eviction | ~100ms |
-| TCP peer heartbeat | 2 missed beats × 200ms interval | ~400ms |
+| Spot notice watcher | EC2 metadata `/spot/termination-time` polled every 5s | graceful step-down; Lease released ~immediately |
+| SIGTERM handler | node drain / pod eviction | graceful step-down; Lease released ~immediately |
+| TCP peer heartbeat | 2 missed beats × 200ms interval | takeover attempt (~400ms); succeeds once the peer's Lease is absent/expired |
+
+A graceful step-down fails over in about a second. An ungraceful failure (crash, hard termination) fails over within `KUBE_NAT_LEASE_DURATION`, when the dead owner's Lease expires.
 
 ### Components
 
@@ -212,10 +215,10 @@ All agent configuration is also available as environment variables (Helm injects
 | `KUBE_NAT_MODE` | `auto` | `auto` manages EC2 routes; `manual` iptables only |
 | `KUBE_NAT_TAG_PREFIX` | `kube-nat` | Prefix for EC2 resource tags |
 | `KUBE_NAT_CONNTRACK_MAX` | _(kernel default)_ | Override `nf_conntrack_max` sysctl |
-| `KUBE_NAT_LEASE_DURATION` | `15s` | How long a lease is valid without renewal |
+| `KUBE_NAT_LEASE_DURATION` | `30s` | How long an AZ's Lease is valid without renewal; also the upper bound on ungraceful failover time |
 | `KUBE_NAT_PROBE_INTERVAL` | `200ms` | TCP heartbeat interval between peer agents |
-| `KUBE_NAT_PROBE_FAILURES` | `2` | Missed heartbeats before triggering takeover |
-| `KUBE_NAT_RECONCILE_INTERVAL` | `30s` | How often to reconcile iptables and routes |
+| `KUBE_NAT_PROBE_FAILURES` | `2` | Missed heartbeats before a takeover **attempt** (the attempt still requires the peer's Lease to be absent or expired) |
+| `KUBE_NAT_RECONCILE_INTERVAL` | `30s` | How often to reconcile iptables and routes, retry failed takeovers, and sweep for expired Leases |
 | `KUBE_NAT_METRICS_PORT` | `9100` | Port for Prometheus metrics and health endpoints |
 | `KUBE_NAT_PEER_PORT` | `9101` | Port for inter-agent TCP heartbeats |
 | `KUBE_NAT_AZ_LABEL` | `topology.kubernetes.io/zone` | Node label used to determine the agent's AZ |
@@ -256,7 +259,7 @@ Each agent exposes two HTTP endpoints on `KUBE_NAT_METRICS_PORT`:
 | Path | Ready when |
 |---|---|
 | `/healthz` | Process is alive |
-| `/readyz` | iptables rule is present AND lease is held |
+| `/readyz` | Data plane (masquerade + forwarding) is applied AND this AZ's route table is claimed |
 
 ---
 
@@ -394,7 +397,7 @@ No. Fargate nodes do not expose the host network or allow iptables manipulation.
 Yes. The spot-interruption watcher is a no-op on on-demand instances. The failover mechanism still works for other failure modes.
 
 **Q: What happens to existing connections during a failover?**  
-Established TCP connections that are tracked in conntrack survive if the new agent takes over within the conntrack timeout (default: 432000s for established TCP). In practice, a 400ms failover is transparent to most applications. UDP and short-lived TCP connections may experience brief packet loss.
+Established TCP connections that are tracked in conntrack survive if the new agent takes over within the conntrack timeout (default: 432000s for established TCP). A graceful step-down fails over in about a second, which is transparent to most applications. An ungraceful failure fails over within `KUBE_NAT_LEASE_DURATION`. UDP and short-lived TCP connections may experience brief packet loss.
 
 **Q: Why does the agent need `hostNetwork: true`?**  
 iptables rules must be installed in the host network namespace to intercept pod traffic at the node level. Without `hostNetwork`, the agent would only see its own network namespace.
@@ -406,7 +409,7 @@ iptables rules must be installed in the host network namespace to intercept pod 
 When your VPC routing is managed externally (Transit Gateway, Direct Connect, custom routing appliances), set `mode: manual`. kube-nat will still manage the iptables MASQUERADE rule but will not create or modify EC2 route table entries.
 
 **Q: How does kube-nat handle multiple agents in the same AZ?**  
-Only one agent per AZ holds the Kubernetes Lease. The inactive agent watches the lease and takes over if the active agent fails to renew it within `KUBE_NAT_LEASE_DURATION` (default: 15s). At most one agent per AZ is active at any time.
+Each AZ is owned by the agent running in it, which always points that AZ's route table at its own instance. A per-AZ Kubernetes Lease records ownership and gates failover: a surviving agent may only claim a failed AZ's route table once that AZ's Lease is absent or expired (`KUBE_NAT_LEASE_DURATION`, default 30s), and a returning owner preempts a failover holder. Because the own-AZ route target is always the same instance, the own-AZ route cannot flap between agents.
 
 **Q: Does kube-nat support IPv6?**  
 Not currently. kube-nat manages IPv4 MASQUERADE rules only.
@@ -438,7 +441,8 @@ kubectl get pods -n kube-nat -o wide
 
 ```bash
 kubectl get leases -n kube-nat
-# Each lease should have a holderIdentity matching an agent pod name
+# Each lease should have a holderIdentity matching an agent pod name,
+# and a kube-nat/home-az label matching the AZ it belongs to
 ```
 
 **Check 3: Is the iptables rule present?**
@@ -502,16 +506,20 @@ Rule of thumb: allocate ~300 bytes per conntrack entry. A t3.medium (4 GB RAM) c
 
 ---
 
-### Failover is slow (>1s)
+### Failover is slow
 
-Check `KUBE_NAT_PROBE_INTERVAL` and `KUBE_NAT_PROBE_FAILURES`. The default is 200ms × 2 = 400ms maximum detection time. If failovers are taking longer:
+Detection is fast (`KUBE_NAT_PROBE_INTERVAL` × `KUBE_NAT_PROBE_FAILURES` = 200ms × 2 = 400ms by default), but a takeover only succeeds once the failed AZ's Lease is absent or expired. So:
+
+- **Graceful step-down** (spot notice or SIGTERM) releases the Lease immediately — expect failover in about a second.
+- **Ungraceful failure** (crash, hard termination) waits for the Lease to expire — bounded by `KUBE_NAT_LEASE_DURATION` (default 30s). Lower it to fail over faster, at the cost of less tolerance for a slow API server.
 
 ```bash
-kubectl logs -n kube-nat <agent-pod> | grep "peer"
-# Look for: peer_latency_ms= values higher than expected
+kubectl logs -n kube-nat <agent-pod> | grep -E "declared dead|takeover|lease"
+# Look for: "peer <az> declared dead — attempting takeover" followed by either
+# "claimed <rtb>" or "another agent won the lease race"
 ```
 
-Network latency between NAT nodes in the same AZ should be <1ms. If peer latency is high, check for noisy-neighbor CPU issues on the spot instance.
+A takeover that logs "another agent won the lease race" or that finds the Lease still held means the peer's Lease had not expired yet — that is the intended protection against stealing from a healthy (or merely slow) agent. Network latency between NAT nodes in the same AZ should be <1ms; if peer latency is high, check for noisy-neighbor CPU issues on the spot instance.
 
 ---
 

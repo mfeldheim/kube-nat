@@ -51,7 +51,7 @@ func TestTakeoverAcquiresLeaseAndClaimsRouteTable(t *testing.T) {
 		LeaseDuration: 30 * time.Second,
 		Mode:          "auto",
 	}
-	leaseMgr := lease.NewManager(k8s, cfg.Namespace, cfg.LeaseDuration)
+	leaseMgr := lease.NewManager(k8s, cfg.Namespace, cfg.LeaseDuration, "eu-west-1b")
 	ec2 := &fakeEC2{}
 
 	// Seed an expired Lease for eu-west-1a.

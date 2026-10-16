@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -105,8 +106,8 @@ func Run(cfg *config.Config) error {
 	logger.Printf("Kubernetes client ready")
 
 	// 7. Lease manager
-	logger.Printf("initializing lease manager namespace=%s duration=%s", cfg.Namespace, cfg.LeaseDuration)
-	leaseMgr := lease.NewManager(k8sClient, cfg.Namespace, cfg.LeaseDuration)
+	logger.Printf("initializing lease manager namespace=%s duration=%s home-az=%s", cfg.Namespace, cfg.LeaseDuration, meta.AZ)
+	leaseMgr := lease.NewManager(k8sClient, cfg.Namespace, cfg.LeaseDuration, meta.AZ)
 
 	// 8. Reconciler
 	logger.Printf("initializing reconciler mode=%s iface=%s az=%s instance=%s", cfg.Mode, meta.PublicIface, meta.AZ, meta.InstanceID)
@@ -120,61 +121,38 @@ func Run(cfg *config.Config) error {
 		Mode:       cfg.Mode,
 	})
 
-	// 9. Initial reconcile — sets up iptables and claims route table
-	logger.Printf("running initial reconcile")
-	if err := rec.Reconcile(ctx); err != nil {
-		return fmt.Errorf("initial reconcile: %w", err)
+	// 9. Data plane — iptables MASQUERADE + IP forwarding. No route table is
+	// claimed yet: the peer server (below) must be listening first, so peers
+	// never observe a route owned by an agent they cannot reach.
+	logger.Printf("applying data plane (iptables + ip_forward)")
+	if err := rec.SetupDataPlane(); err != nil {
+		return fmt.Errorf("initial data plane setup: %w", err)
 	}
-	logger.Printf("initial reconcile complete")
 
-	// 10. Write own Lease
-	podName := podNameOrInstanceID(meta.InstanceID)
-	logger.Printf("writing initial lease az=%s pod=%s", meta.AZ, podName)
-	if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
-		return fmt.Errorf("initial lease renew: %w", err)
-	}
-	logger.Printf("lease written")
-
-	// 11. Peer server
+	// 10. Peer server — listen before claiming anything, so peers never observe
+	// a route owned by an agent they cannot reach. The peer subsystem has its
+	// own context so it stays up long enough to broadcast a step-down during
+	// shutdown (the main context is already cancelled by then).
+	peerCtx, peerCancel := context.WithCancel(context.Background())
+	defer peerCancel()
 	peerAddr := fmt.Sprintf(":%d", cfg.PeerPort)
 	peerSrv := peer.NewServer(peerAddr)
 	if err := peerSrv.Listen(); err != nil {
 		return fmt.Errorf("peer server listen: %w", err)
 	}
-	go peerSrv.Serve(ctx)
+	go peerSrv.Serve(peerCtx)
 	logger.Printf("peer server on %s", peerAddr)
 
-	// 12. Peer watcher — discovers other agents and monitors their health.
-	// Runs periodically so agents that start after us are still discovered.
-	var (
-		peerMu      sync.Mutex
-		peerClients []*peer.Client
-	)
-	go startPeerWatcher(ctx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, rec, &peerMu, &peerClients)
-
-	// 13. Spot watcher — proactive step-down on interruption notice
-	spotWatcher := spot.NewWatcher("", time.Second, func() {
-		logger.Printf("spot interruption notice — initiating step-down")
-		reg.SpotInterruptionPending.Set(1)
-		peerMu.Lock()
-		for _, c := range peerClients {
-			c.SendStepDown()
-		}
-		peerMu.Unlock()
-		cancel()
-	})
-	go spotWatcher.Run(ctx)
-
-	// 14. Ready gate
-	ready := true
+	// 11. HTTP server: /metrics /healthz /readyz /claim /release. Started early
+	// (so /healthz answers during boot) but /readyz reports 503 until the data
+	// plane is applied and this AZ's route table is claimed.
+	var ready atomic.Bool
 	readyFn := func() error {
-		if !ready {
+		if !ready.Load() {
 			return fmt.Errorf("not ready")
 		}
 		return nil
 	}
-
-	// 15. HTTP server: /metrics /healthz /readyz /claim /release
 	mux := metrics.NewMux(reg, readyFn)
 	metrics.AddClaimHandler(mux, func(ctx context.Context) error {
 		logger.Printf("manual route table claim triggered via HTTP")
@@ -195,7 +173,96 @@ func Run(cfg *config.Config) error {
 		}
 	}()
 
-	// 16. Reconciliation loop
+	// 12. Claim our own AZ's route table. This is always safe: the target is
+	// this node's own instance ID, so it is identical no matter which pod of
+	// this AZ issues the write — the own-AZ claim can never flap against another
+	// agent. The data plane and peer server are already up, so peers never
+	// observe a route owned by an agent they cannot reach.
+	podName := podNameOrInstanceID(meta.InstanceID)
+	if err := rec.ClaimOwnRouteTables(ctx); err != nil {
+		logger.Printf("initial route table claim failed (will retry): %v", err)
+	} else {
+		ready.Store(true)
+	}
+
+	// 13. Establish our own AZ's Lease (best-effort; the lease loop maintains
+	// it). The Lease is the lock that lets a failover agent take over an AZ
+	// whose owner is truly gone, and lets us reclaim ours from a failover
+	// holder without stealing from a live owner.
+	if ok, err := leaseMgr.Acquire(ctx, meta.AZ, podName); err != nil {
+		logger.Printf("initial own lease acquire: %v", err)
+	} else if ok {
+		logger.Printf("acquired own lease az=%s", meta.AZ)
+	}
+
+	// 14. Peer watcher — discovers other agents and monitors their health.
+	// Runs periodically so agents that start after us are still discovered.
+	var (
+		peerMu      sync.Mutex
+		peerClients []*peer.Client
+	)
+	go startPeerWatcher(peerCtx, cfg, k8sClient, leaseMgr, ec2Client, meta, reg, logger, rec, &peerMu, &peerClients)
+
+	// 15. Spot watcher — proactive step-down on interruption notice. It only
+	// cancels the context: the shutdown path releases Leases *before* telling
+	// peers to take over (ordering matters, see the shutdown block).
+	spotWatcher := spot.NewWatcher("", time.Second, func() {
+		logger.Printf("spot interruption notice — initiating step-down")
+		reg.SpotInterruptionPending.Set(1)
+		cancel()
+	})
+	go spotWatcher.Run(ctx)
+
+	// 16. Lease renewal loop — the lock heartbeat. Renews own and failover
+	// Leases every LeaseRenewInterval (a fraction of LeaseDuration) so a healthy
+	// owner's Lease never spuriously expires and is never falsely stolen.
+	//
+	// Losing our own Lease does NOT make us stop serving our own AZ (the own-AZ
+	// route target is always this instance, so continuing is safe and correct);
+	// it just means a failover agent currently holds the lock, so we try to
+	// reclaim it. Losing a *failover* Lease means the AZ's real owner is back,
+	// so we yield that AZ's bookkeeping.
+	go func() {
+		ticker := time.NewTicker(cfg.LeaseRenewInterval())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				held, err := leaseMgr.Renew(ctx, meta.AZ, podName)
+				if err != nil {
+					logger.Printf("lease renew (own az) error: %v", err)
+				}
+				if !held {
+					if ok, aerr := leaseMgr.Acquire(ctx, meta.AZ, podName); aerr != nil {
+						logger.Printf("re-acquire own lease az=%s: %v", meta.AZ, aerr)
+					} else if ok {
+						logger.Printf("reclaimed own lease az=%s from failover holder", meta.AZ)
+					}
+				}
+				// Keep failover Leases alive; yield any the original owner took back.
+				for _, az := range rec.ForeignAZs() {
+					ok, rerr := leaseMgr.Renew(ctx, az, podName)
+					if rerr != nil {
+						logger.Printf("failover lease renew error az=%s: %v", az, rerr)
+						continue
+					}
+					if !ok {
+						logger.Printf("failover lease az=%s reclaimed by its owner — yielding", az)
+						for _, rtbID := range rec.ReleaseForeignAZ(az) {
+							reg.RouteTableOwned.WithLabelValues(rtbID).Set(0)
+						}
+					}
+				}
+			}
+		}
+	}()
+
+	// 17. Reconciliation loop — re-applies the data plane and always re-asserts
+	// our own AZ's route table (its target is this instance, so it can never
+	// flap), releases failover tables the original owner reclaimed, and runs a
+	// last-resort sweep that covers any AZ whose Lease has expired.
 	go func() {
 		ticker := time.NewTicker(cfg.ReconcileInterval)
 		defer ticker.Stop()
@@ -205,11 +272,16 @@ func Run(cfg *config.Config) error {
 				return
 			case <-ticker.C:
 				logger.Printf("reconcile tick")
-				if err := rec.Reconcile(ctx); err != nil {
-					logger.Printf("reconcile error: %v", err)
+				if err := rec.SetupDataPlane(); err != nil {
+					logger.Printf("data plane reconcile error: %v", err)
+					ready.Store(false)
+					continue
 				}
-				if err := leaseMgr.Renew(ctx, meta.AZ, podName); err != nil {
-					logger.Printf("lease renew error: %v", err)
+				if err := rec.ClaimOwnRouteTables(ctx); err != nil {
+					logger.Printf("own route table reconcile error: %v", err)
+					ready.Store(false)
+				} else {
+					ready.Store(true)
 				}
 				// Detect when original owners reclaim their route tables.
 				if vacated, err := rec.ReconcileForeign(ctx); err != nil {
@@ -219,10 +291,17 @@ func Run(cfg *config.Config) error {
 						reg.RouteTableOwned.WithLabelValues(rtbID).Set(0)
 					}
 				}
-				// Keep our failover leases alive so no other agent races us.
-				for _, foreignAZ := range rec.ForeignAZs() {
-					if err := leaseMgr.Renew(ctx, foreignAZ, podName); err != nil {
-						logger.Printf("failover lease renew error az=%s: %v", foreignAZ, err)
+				// Last-resort catch-all: cover any AZ whose Lease has expired and
+				// that we are not already covering.
+				if expired, err := leaseMgr.ListExpiredAZs(ctx, meta.AZ); err != nil {
+					logger.Printf("list expired leases: %v", err)
+				} else {
+					for _, az := range expired {
+						if rec.CoversAZ(az) {
+							continue
+						}
+						logger.Printf("lease for az=%s expired — attempting takeover", az)
+						takeover(ctx, cfg, leaseMgr, ec2Client, meta, reg, logger, az, rec)
 					}
 				}
 				updateMetrics(reg, meta, natMgr, rec)
@@ -230,7 +309,7 @@ func Run(cfg *config.Config) error {
 		}
 	}()
 
-	// 17. Bandwidth + resource sampler — 1s ticker for bandwidth, CPU, and memory.
+	// 18. Bandwidth + resource sampler — 1s ticker for bandwidth, CPU, and memory.
 	go func() {
 		type samplerState struct {
 			bytesTX uint64
@@ -300,14 +379,30 @@ func Run(cfg *config.Config) error {
 	logger.Printf("ready — az=%s instance=%s mode=%s", meta.AZ, meta.InstanceID, cfg.Mode)
 	<-ctx.Done()
 
-	logger.Printf("shutting down — sending step-down to peers")
-	ready = false
+	logger.Printf("shutting down — releasing leases then stepping down peers")
+	ready.Store(false)
+
+	// Release the Lease FIRST. A failover agent's Acquire is gated on the Lease
+	// being absent or expired, so releasing before the step-down is what lets it
+	// take over immediately instead of losing a race and waiting a full interval.
+	relCtx, relCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := leaseMgr.Release(relCtx, meta.AZ, podName); err != nil {
+		logger.Printf("release own lease: %v", err)
+	}
+	for _, az := range rec.ForeignAZs() {
+		if err := leaseMgr.Release(relCtx, az, podName); err != nil {
+			logger.Printf("release failover lease az=%s: %v", az, err)
+		}
+	}
+	relCancel()
+
 	peerMu.Lock()
 	for _, c := range peerClients {
 		c.SendStepDown()
 	}
 	peerMu.Unlock()
-	time.Sleep(100 * time.Millisecond) // allow step-down to propagate
+	time.Sleep(200 * time.Millisecond) // allow step-down to propagate
+	peerCancel()                       // tear down the peer subsystem last
 	httpSrv.Shutdown(context.Background())
 	return nil
 }

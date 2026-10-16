@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -15,13 +16,21 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	az   string
-	cfg  ClientConfig
+	az  string
+	cfg ClientConfig
+
+	mu   sync.Mutex
 	conn net.Conn
 }
 
 func NewClient(az string, cfg ClientConfig) *Client {
 	return &Client{az: az, cfg: cfg}
+}
+
+func (c *Client) setConn(conn net.Conn) {
+	c.mu.Lock()
+	c.conn = conn
+	c.mu.Unlock()
 }
 
 // Connect dials addr and runs the heartbeat loop.
@@ -48,11 +57,11 @@ func (c *Client) Connect(ctx context.Context, addr string) {
 			time.Sleep(c.cfg.ProbeInterval)
 			continue
 		}
-		c.conn = conn
+		c.setConn(conn)
 		failures = 0
 		result := c.runHeartbeat(ctx, conn)
 		conn.Close()
-		c.conn = nil
+		c.setConn(nil)
 		if result == heartbeatStepDown {
 			if c.cfg.OnStepDown != nil {
 				c.cfg.OnStepDown(c.az)
@@ -70,14 +79,18 @@ func (c *Client) Connect(ctx context.Context, addr string) {
 }
 
 // SendStepDown sends a step-down message over the current connection.
-// Called on SIGTERM before the agent exits.
+// Called on SIGTERM before the agent exits. Safe to call concurrently with
+// Connect; it is a no-op when no connection is currently established.
 func (c *Client) SendStepDown() {
-	if c.conn == nil {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
 		return
 	}
 	msg := Encode(Message{Type: MsgStepDown, Timestamp: time.Now().UnixNano()})
-	c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-	c.conn.Write(msg)
+	conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+	conn.Write(msg)
 }
 
 type heartbeatResult int

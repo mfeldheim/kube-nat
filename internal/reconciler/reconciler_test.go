@@ -190,3 +190,94 @@ func TestCanFallbackToNATFalseWhenNoFallbackExists(t *testing.T) {
 	}
 }
 
+// SetupDataPlane must never claim a route table — it only installs the data
+// plane. Claiming is gated behind Lease ownership in the agent.
+func TestSetupDataPlaneDoesNotClaim(t *testing.T) {
+	n := &fakeNAT{}
+	e := newFakeEC2("rtb-001", "nat-0abc")
+	r := reconciler.New(reconciler.Config{
+		NATManager: n,
+		EC2Client:  e,
+		Iface:      "eth0",
+		AZ:         "eu-west-1a",
+		InstanceID: "i-0abc",
+		Mode:       "auto",
+		LogWriter:  io.Discard,
+	})
+
+	if err := r.SetupDataPlane(); err != nil {
+		t.Fatal(err)
+	}
+	if n.ensureCalled == 0 {
+		t.Error("expected EnsureMasquerade to be called")
+	}
+	if e.claimCalled != 0 {
+		t.Error("SetupDataPlane must not claim route tables")
+	}
+	if got := r.OwnedTables(); len(got) != 0 {
+		t.Errorf("SetupDataPlane must not record owned tables, got %v", got)
+	}
+}
+
+func TestClaimOwnRouteTables(t *testing.T) {
+	n := &fakeNAT{}
+	e := newFakeEC2("rtb-001", "nat-0abc")
+	r := reconciler.New(reconciler.Config{
+		NATManager: n,
+		EC2Client:  e,
+		Iface:      "eth0",
+		AZ:         "eu-west-1a",
+		InstanceID: "i-0abc",
+		Mode:       "auto",
+		LogWriter:  io.Discard,
+	})
+
+	if err := r.ClaimOwnRouteTables(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if e.claimCalled == 0 {
+		t.Error("expected ClaimRouteTable to be called")
+	}
+	if got := r.OwnedTables(); len(got) != 1 || got[0] != "rtb-001" {
+		t.Errorf("want owned [rtb-001] got %v", got)
+	}
+}
+
+func TestReleaseForeignAZ(t *testing.T) {
+	n := &fakeNAT{}
+	e := newFakeEC2("rtb-001", "nat-0abc")
+	r := reconciler.New(reconciler.Config{
+		NATManager: n,
+		EC2Client:  e,
+		Iface:      "eth0",
+		AZ:         "eu-west-1a",
+		InstanceID: "i-0abc",
+		Mode:       "auto",
+		LogWriter:  io.Discard,
+	})
+
+	r.AddForeignTables("eu-west-1b", []string{"rtb-002", "rtb-003"})
+	r.AddForeignTables("eu-west-1c", []string{"rtb-004"})
+
+	if !r.CoversAZ("eu-west-1b") {
+		t.Error("expected to cover eu-west-1b")
+	}
+	if r.CoversAZ("eu-west-1a") {
+		t.Error("must not report covering own AZ")
+	}
+
+	released := r.ReleaseForeignAZ("eu-west-1b")
+	if len(released) != 2 {
+		t.Errorf("want 2 released tables got %v", released)
+	}
+	if r.CoversAZ("eu-west-1b") {
+		t.Error("should no longer cover eu-west-1b")
+	}
+	if !r.CoversAZ("eu-west-1c") {
+		t.Error("should still cover eu-west-1c")
+	}
+	if got := r.ForeignAZs(); len(got) != 1 || got[0] != "eu-west-1c" {
+		t.Errorf("want foreign AZs [eu-west-1c] got %v", got)
+	}
+}
+

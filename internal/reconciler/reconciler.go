@@ -177,18 +177,64 @@ func (r *Reconciler) ReconcileForeign(ctx context.Context) ([]string, error) {
 	return vacated, nil
 }
 
-// Reconcile brings the node into the desired NAT state.
-// Safe to call repeatedly — all operations are idempotent.
-// In auto mode: verifies each owned route table points to this instance and re-claims if not.
-// In manual mode: logs the current route state and the command needed to fix any drift, without acting.
-func (r *Reconciler) Reconcile(ctx context.Context) error {
+// SetupDataPlane applies the idempotent data-plane state for this node: the
+// MASQUERADE iptables rule and IP forwarding. It never touches route tables, so
+// it is safe to run before this agent owns (or has claimed) any AZ.
+func (r *Reconciler) SetupDataPlane() error {
 	if err := r.cfg.NATManager.EnsureMasquerade(r.cfg.Iface); err != nil {
 		return fmt.Errorf("ensure masquerade: %w", err)
 	}
 	if err := r.cfg.NATManager.EnableIPForward(); err != nil {
 		return fmt.Errorf("ip_forward: %w", err)
 	}
+	return nil
+}
 
+// ReleaseForeignAZ drops the failover bookkeeping for every route table this
+// agent was covering on behalf of az, returning the route table IDs that were
+// dropped so callers can clear their ownership gauge. It does not touch AWS.
+func (r *Reconciler) ReleaseForeignAZ(az string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var released []string
+	for id, deadAZ := range r.foreignOwnedTables {
+		if deadAZ == az {
+			released = append(released, id)
+			delete(r.foreignOwnedTables, id)
+		}
+	}
+	return released
+}
+
+// CoversAZ reports whether this agent is currently covering az's route tables.
+func (r *Reconciler) CoversAZ(az string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, deadAZ := range r.foreignOwnedTables {
+		if deadAZ == az {
+			return true
+		}
+	}
+	return false
+}
+
+// Reconcile brings the node into the desired NAT state.
+// Safe to call repeatedly — all operations are idempotent.
+// In auto mode: verifies each owned route table points to this instance and re-claims if not.
+// In manual mode: logs the current route state and the command needed to fix any drift, without acting.
+func (r *Reconciler) Reconcile(ctx context.Context) error {
+	if err := r.SetupDataPlane(); err != nil {
+		return err
+	}
+	return r.ClaimOwnRouteTables(ctx)
+}
+
+// ClaimOwnRouteTables discovers and claims the route tables for this agent's own
+// AZ. In auto mode it points 0.0.0.0/0 at this instance; in manual mode it only
+// logs the command an operator would run. The own-AZ target is always this
+// instance, so this can never flap against another agent; callers should have
+// applied SetupDataPlane first.
+func (r *Reconciler) ClaimOwnRouteTables(ctx context.Context) error {
 	tables, err := r.cfg.EC2Client.DiscoverRouteTables(ctx, r.cfg.AZ)
 	if err != nil {
 		return fmt.Errorf("discover route tables: %w", err)

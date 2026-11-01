@@ -15,6 +15,7 @@ agent:
   reconcileInterval: ""    # KUBE_NAT_RECONCILE_INTERVAL, e.g. "30s" (empty = agent default)
   standDownOnDrain: true   # KUBE_NAT_STAND_DOWN_ON_DRAIN: a draining node's agent releases its AZ lease and stops claiming routes
   drainPollInterval: ""    # KUBE_NAT_DRAIN_POLL_INTERVAL, e.g. "5s" (empty = agent default)
+  resetStaleFlows: true    # KUBE_NAT_RESET_STALE_FLOWS: answer packets of connections this node never saw with a TCP reset
   nodeSelector: {}  # override in your values file; no default to avoid merge conflicts
   # Tolerations for the NAT node taint. The DaemonSet controller always adds the
   # standard node-condition tolerations (not-ready, unreachable, *-pressure,

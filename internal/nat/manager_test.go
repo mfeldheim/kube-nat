@@ -34,6 +34,10 @@ func (f *fakeNAT) SetConntrackMax(max int) error {
 	return nil
 }
 
+func (f *fakeNAT) EnsureStaleFlowReset(_ string) error {
+	return nil
+}
+
 func TestNATManagerInterface(t *testing.T) {
 	var _ nat.Manager = &fakeNAT{}
 }

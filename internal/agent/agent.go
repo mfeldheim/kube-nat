@@ -119,6 +119,8 @@ func Run(cfg *config.Config) error {
 		InstanceID: meta.InstanceID,
 		Region:     meta.Region,
 		Mode:       cfg.Mode,
+
+		ResetStaleFlows: cfg.ResetStaleFlows,
 	})
 
 	// 9. Data plane — iptables MASQUERADE + IP forwarding. No route table is

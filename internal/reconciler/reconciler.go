@@ -21,6 +21,10 @@ type Config struct {
 	Region     string
 	Mode       string // "auto" or "manual"
 	LogWriter  io.Writer
+
+	// ResetStaleFlows also installs the stale flow reset (see
+	// nat.Manager.EnsureStaleFlowReset) as part of the data plane.
+	ResetStaleFlows bool
 }
 
 type Reconciler struct {
@@ -191,14 +195,23 @@ func (r *Reconciler) ReconcileForeign(ctx context.Context) ([]string, error) {
 }
 
 // SetupDataPlane applies the idempotent data-plane state for this node: the
-// MASQUERADE iptables rule and IP forwarding. It never touches route tables, so
-// it is safe to run before this agent owns (or has claimed) any AZ.
+// MASQUERADE iptables rule, IP forwarding and, if enabled, the stale flow
+// reset. It never touches route tables, so it is safe to run before this agent
+// owns (or has claimed) any AZ.
 func (r *Reconciler) SetupDataPlane() error {
 	if err := r.cfg.NATManager.EnsureMasquerade(r.cfg.Iface); err != nil {
 		return fmt.Errorf("ensure masquerade: %w", err)
 	}
 	if err := r.cfg.NATManager.EnableIPForward(); err != nil {
 		return fmt.Errorf("ip_forward: %w", err)
+	}
+	// The stale flow reset only shortens recovery after a NAT swap, so a
+	// failure is logged instead of failing the data plane: forwarding works
+	// without it, and the next reconcile tick tries again.
+	if r.cfg.ResetStaleFlows {
+		if err := r.cfg.NATManager.EnsureStaleFlowReset(r.cfg.Iface); err != nil {
+			r.logger.Printf("stale flow reset: %v", err)
+		}
 	}
 	return nil
 }

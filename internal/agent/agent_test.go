@@ -21,8 +21,9 @@ type fakeNAT struct{ ensureCalled int }
 
 func (f *fakeNAT) EnsureMasquerade(_ string) error         { f.ensureCalled++; return nil }
 func (f *fakeNAT) MasqueradeExists(_ string) (bool, error) { return true, nil }
-func (f *fakeNAT) EnableIPForward() error                   { return nil }
-func (f *fakeNAT) SetConntrackMax(_ int) error { return nil }
+func (f *fakeNAT) EnableIPForward() error                  { return nil }
+func (f *fakeNAT) SetConntrackMax(_ int) error             { return nil }
+func (f *fakeNAT) EnsureStaleFlowReset(_ string) error     { return nil }
 
 type fakeEC2 struct{ claimCalled int }
 
@@ -34,7 +35,7 @@ func (f *fakeEC2) ClaimRouteTable(_ context.Context, _, _ string) error {
 	f.claimCalled++
 	return nil
 }
-func (f *fakeEC2) ReleaseRouteTable(_ context.Context, _, _ string) error  { return nil }
+func (f *fakeEC2) ReleaseRouteTable(_ context.Context, _, _ string) error { return nil }
 func (f *fakeEC2) LookupNatGateway(_ context.Context, _, _ string) (string, error) {
 	return "nat-fake", nil
 }

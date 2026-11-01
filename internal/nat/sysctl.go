@@ -5,6 +5,9 @@ import (
 	"os"
 )
 
+// procSysRoot is the host's /proc/sys as mounted into the agent.
+var procSysRoot = "/host/proc/sys"
+
 func writeSysctl(path, value string) error {
 	if err := os.WriteFile(path, []byte(value), 0644); err != nil {
 		return fmt.Errorf("sysctl %s=%s: %w", path, value, err)

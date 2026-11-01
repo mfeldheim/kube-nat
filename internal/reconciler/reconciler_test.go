@@ -9,12 +9,16 @@ import (
 	"github.com/kube-nat/kube-nat/internal/reconciler"
 )
 
-type fakeNAT struct{ ensureCalled int }
+type fakeNAT struct {
+	ensureCalled int
+	resetCalled  int
+}
 
-func (f *fakeNAT) EnsureMasquerade(_ string) error            { f.ensureCalled++; return nil }
-func (f *fakeNAT) MasqueradeExists(_ string) (bool, error)    { return true, nil }
-func (f *fakeNAT) EnableIPForward() error                     { return nil }
-func (f *fakeNAT) SetConntrackMax(_ int) error { return nil }
+func (f *fakeNAT) EnsureMasquerade(_ string) error         { f.ensureCalled++; return nil }
+func (f *fakeNAT) MasqueradeExists(_ string) (bool, error) { return true, nil }
+func (f *fakeNAT) EnableIPForward() error                  { return nil }
+func (f *fakeNAT) SetConntrackMax(_ int) error             { return nil }
+func (f *fakeNAT) EnsureStaleFlowReset(_ string) error     { f.resetCalled++; return nil }
 
 // fakeEC2 simulates AWS route table state. currentTarget[rtbID] tracks what
 // the 0.0.0.0/0 route currently points to ("nat-xxx" or an instance ID).
@@ -219,6 +223,31 @@ func TestSetupDataPlaneDoesNotClaim(t *testing.T) {
 	}
 }
 
+// With ResetStaleFlows the data plane also answers packets of connections this
+// node never saw with a TCP reset, so clients reconnect at once after a NAT
+// swap instead of retransmitting into the void for ~15 minutes.
+func TestSetupDataPlaneResetsStaleFlows(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		n := &fakeNAT{}
+		r := reconciler.New(reconciler.Config{
+			NATManager:      n,
+			EC2Client:       newFakeEC2("rtb-001", "nat-0abc"),
+			Iface:           "eth0",
+			AZ:              "eu-west-1a",
+			InstanceID:      "i-0abc",
+			Mode:            "auto",
+			ResetStaleFlows: enabled,
+			LogWriter:       io.Discard,
+		})
+		if err := r.SetupDataPlane(); err != nil {
+			t.Fatal(err)
+		}
+		if got := n.resetCalled > 0; got != enabled {
+			t.Errorf("ResetStaleFlows=%v: EnsureStaleFlowReset called=%v", enabled, got)
+		}
+	}
+}
+
 func TestClaimOwnRouteTables(t *testing.T) {
 	n := &fakeNAT{}
 	e := newFakeEC2("rtb-001", "nat-0abc")
@@ -280,4 +309,3 @@ func TestReleaseForeignAZ(t *testing.T) {
 		t.Errorf("want foreign AZs [eu-west-1c] got %v", got)
 	}
 }
-

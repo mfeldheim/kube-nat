@@ -33,6 +33,11 @@ type Config struct {
 	StandDownOnDrain bool
 	// DrainPollInterval is how often the node's drain state is checked.
 	DrainPollInterval time.Duration
+
+	// ResetStaleFlows makes the node answer packets of connections it has no
+	// conntrack state for with a TCP reset, so clients reconnect at once after
+	// a NAT swap instead of hanging until tcp_retries2 gives up (~15 minutes).
+	ResetStaleFlows bool
 }
 
 func Load() (*Config, error) {
@@ -56,6 +61,8 @@ func Load() (*Config, error) {
 
 		StandDownOnDrain:  getBoolEnv("KUBE_NAT_STAND_DOWN_ON_DRAIN", true),
 		DrainPollInterval: getDurationEnv("KUBE_NAT_DRAIN_POLL_INTERVAL", 5*time.Second),
+
+		ResetStaleFlows: getBoolEnv("KUBE_NAT_RESET_STALE_FLOWS", true),
 	}
 	if cfg.Mode != "auto" && cfg.Mode != "manual" {
 		return nil, fmt.Errorf("KUBE_NAT_MODE must be 'auto' or 'manual', got %q", cfg.Mode)

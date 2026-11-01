@@ -80,6 +80,10 @@ spec:
         - name: KUBE_NAT_DRAIN_POLL_INTERVAL
           value: {{ .Values.agent.drainPollInterval | quote }}
         {{- end }}
+        {{- if ne .Values.agent.resetStaleFlows nil }}
+        - name: KUBE_NAT_RESET_STALE_FLOWS
+          value: {{ .Values.agent.resetStaleFlows | quote }}
+        {{- end }}
         ports:
         - name: metrics
           containerPort: 9100

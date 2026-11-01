@@ -12,6 +12,10 @@ kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE Daemo
 
 ## Changelog
 
+### Unreleased
+
+- **Clients reconnect at once after a NAT swap.** Connections translated by the previous NAT node used to hang for about 15 minutes after a failover or node replacement: the new node adopted their mid-stream packets (`nf_conntrack_tcp_loose=1`), sent them out under its own public IP, and the remote end dropped them silently until the client's `tcp_retries2` gave up. The agent now turns loose pickup off and puts a `REJECT --reject-with tcp-reset` rule for `INVALID` TCP packets at the top of `FORWARD`, ahead of kube-proxy's silent `DROP`. Each stale packet is answered with a RST, so the client sees a reset and opens a new connection through the new NAT node. Configurable via `agent.resetStaleFlows` / `KUBE_NAT_RESET_STALE_FLOWS` (default on).
+
 ### v0.1.21 (2026-10-16)
 
 - `Renew` now retries on a resourceVersion conflict instead of reporting that the agent lost its own Lease, so an agent's lease loop and reconcile loop refreshing the same Lease at the same moment no longer logs a misleading "acquired own lease" on every reconcile tick. A conflict that reveals a different holder is still treated as a loss (renewal never steals).
@@ -97,6 +101,8 @@ Each kube-nat agent:
 | SIGTERM handler | node drain / pod eviction | graceful step-down; Lease released ~immediately |
 | Node-drain watcher | node cordoned or marked for disruption (polled every 5s) | stand-down; Lease released ~immediately, route claims stop |
 | TCP peer heartbeat | 2 missed beats × 200ms interval | takeover attempt (~400ms); succeeds once the peer's Lease is absent/expired |
+
+Moving the route does not move existing connections: the new NAT node has a different public IP and no conntrack state for them. With `KUBE_NAT_RESET_STALE_FLOWS` (default on) it answers their packets with a TCP reset, so clients open new connections right away instead of retransmitting for up to ~15 minutes (`tcp_retries2`).
 
 A graceful step-down fails over in about a second. An ungraceful failure (crash, hard termination) fails over within `KUBE_NAT_LEASE_DURATION`, when the dead owner's Lease expires.
 
@@ -203,6 +209,7 @@ agent:
   conntrackMax: ""                         # override nf_conntrack_max (empty = kernel default)
   tagPrefix: kube-nat                      # prefix for EC2 resource tags
   standDownOnDrain: true                   # a draining node's agent releases its AZ lease and stops claiming routes
+  resetStaleFlows: true                    # reset connections from a previous NAT node so clients reconnect at once
   nodeSelector:
     node-role.kubernetes.io/nat: "true"    # nodes where agents are scheduled
   tolerations:                             # NAT node taint (the DaemonSet controller adds the rest)
@@ -241,6 +248,7 @@ All agent configuration is also available as environment variables (Helm injects
 | `KUBE_NAT_RECONCILE_INTERVAL` | `30s` | How often to reconcile iptables and routes, retry failed takeovers, and sweep for expired Leases |
 | `KUBE_NAT_STAND_DOWN_ON_DRAIN` | `true` | Stand down (release the AZ Lease, stop claiming routes) while the node is cordoned or marked for disruption |
 | `KUBE_NAT_DRAIN_POLL_INTERVAL` | `5s` | How often the node's drain state is checked |
+| `KUBE_NAT_RESET_STALE_FLOWS` | `true` | Answer TCP packets of connections this node has no conntrack state for with a RST (sets `nf_conntrack_tcp_loose=0`), so clients reconnect at once after a NAT swap |
 | `KUBE_NAT_METRICS_PORT` | `9100` | Port for Prometheus metrics and health endpoints |
 | `KUBE_NAT_PEER_PORT` | `9101` | Port for inter-agent TCP heartbeats |
 | `KUBE_NAT_AZ_LABEL` | `topology.kubernetes.io/zone` | Node label used to determine the agent's AZ |

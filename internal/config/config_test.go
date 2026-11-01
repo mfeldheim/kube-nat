@@ -37,6 +37,20 @@ func TestDefaults(t *testing.T) {
 	if cfg.ReconcileInterval != 30*time.Second {
 		t.Errorf("want ReconcileInterval=30s got %v", cfg.ReconcileInterval)
 	}
+	if !cfg.ResetStaleFlows {
+		t.Error("want ResetStaleFlows=true by default")
+	}
+}
+
+func TestResetStaleFlowsCanBeDisabled(t *testing.T) {
+	t.Setenv("KUBE_NAT_RESET_STALE_FLOWS", "false")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResetStaleFlows {
+		t.Error("want ResetStaleFlows=false when KUBE_NAT_RESET_STALE_FLOWS=false")
+	}
 }
 
 func TestLeaseRenewInterval(t *testing.T) {

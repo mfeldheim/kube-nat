@@ -21,6 +21,7 @@ func (noopNAT) EnsureMasquerade(string) error         { return nil }
 func (noopNAT) MasqueradeExists(string) (bool, error) { return true, nil }
 func (noopNAT) EnableIPForward() error                { return nil }
 func (noopNAT) SetConntrackMax(int) error             { return nil }
+func (noopNAT) EnsureStaleFlowReset(string) error     { return nil }
 
 // countingEC2 reports a route table that points somewhere else, so every
 // successful serve attempt has to issue a claim.

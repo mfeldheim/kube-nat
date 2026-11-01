@@ -75,6 +75,15 @@ func (r *Reconciler) DropOwnTables() []string {
 	return owned
 }
 
+// OwnClaimPending reports whether this agent has yet to claim its own AZ's
+// route tables: in auto mode with none claimed, either never or since standing
+// by. Manual mode never claims.
+func (r *Reconciler) OwnClaimPending() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cfg.Mode != "manual" && len(r.ownedTables) == 0
+}
+
 // CanFallbackToNAT reports whether every currently owned route table has a known
 // NAT gateway target that ReleaseRouteTables can restore traffic to.
 func (r *Reconciler) CanFallbackToNAT() bool {

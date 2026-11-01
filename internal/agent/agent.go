@@ -260,7 +260,7 @@ func Run(cfg *config.Config) error {
 				if isDraining() {
 					continue
 				}
-				if _, err := ensureOwnLease(ctx, leaseMgr, meta.AZ, podName, logger); err != nil {
+				if err := renewOwnLease(ctx, leaseMgr, rec, meta.AZ, podName, logger); err != nil {
 					logger.Printf("own lease renew error: %v", err)
 				}
 				// Keep failover Leases alive; yield any the original owner took back.
@@ -652,6 +652,27 @@ func serveOwnAZ(ctx context.Context, leaseMgr *lease.Manager, rec *reconciler.Re
 		return true, fmt.Errorf("claim own route tables az=%s: %w", az, err)
 	}
 	return true, nil
+}
+
+// renewOwnLease is the lease loop's step for the own AZ. A standby that takes
+// over the freed Lease claims the route table right away: waiting for the next
+// reconcile tick left the route pointing at an instance that was terminated in
+// the meantime, an egress blackhole of up to ReconcileInterval. Once claimed,
+// renewals make no EC2 calls; the reconcile loop re-asserts the route.
+func renewOwnLease(ctx context.Context, leaseMgr *lease.Manager, rec *reconciler.Reconciler,
+	az, podName string, logger *log.Logger) error {
+
+	held, err := ensureOwnLease(ctx, leaseMgr, az, podName, logger)
+	if err != nil {
+		return err
+	}
+	if !held || !rec.OwnClaimPending() {
+		return nil
+	}
+	if err := rec.ClaimOwnRouteTables(ctx); err != nil {
+		return fmt.Errorf("claim own route tables az=%s: %w", az, err)
+	}
+	return nil
 }
 
 // ensureOwnLease renews this AZ's Lease, or acquires it when it is free, and

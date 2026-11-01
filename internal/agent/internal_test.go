@@ -107,6 +107,55 @@ func TestTwoAgentsInSameAZDoNotBothClaim(t *testing.T) {
 	}
 }
 
+// TestLeaseLoopClaimsOnAcquire is the regression test for the egress blackhole
+// seen when a NAT node was removed: the standby picked up the freed AZ Lease in
+// the lease loop, but the route table was only claimed on the next reconcile
+// tick, up to ReconcileInterval later. The old instance was terminated in
+// between, so the route pointed at nothing. Taking the Lease must claim the
+// route right away; a plain renewal must not claim again.
+func TestLeaseLoopClaimsOnAcquire(t *testing.T) {
+	ctx := context.Background()
+	logger := log.New(io.Discard, "", 0)
+	k8s := fake.NewSimpleClientset()
+	const az = "eu-west-1a"
+
+	mgrA := lease.NewManager(k8s, "kube-nat", 30*time.Second, az)
+	mgrB := lease.NewManager(k8s, "kube-nat", 30*time.Second, az)
+	ec2B := &countingEC2{}
+	recB := newTestReconciler(az, "i-nodeB", ec2B)
+
+	if serving, err := serveOwnAZ(ctx, mgrA, newTestReconciler(az, "i-nodeA", &countingEC2{}), az, "agent-a", logger); err != nil || !serving {
+		t.Fatalf("agent A should serve the AZ: serving=%v err=%v", serving, err)
+	}
+
+	// Standby B renews while A holds the Lease: no claim.
+	if err := renewOwnLease(ctx, mgrB, recB, az, "agent-b", logger); err != nil {
+		t.Fatal(err)
+	}
+	if ec2B.claims != 0 {
+		t.Fatalf("standby must not claim, got %d claims", ec2B.claims)
+	}
+
+	// A stands down; B's next lease tick takes the Lease and must claim at once.
+	if err := mgrA.Release(ctx, az, "agent-a"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err := renewOwnLease(ctx, mgrB, recB, az, "agent-b", logger); err != nil {
+		t.Fatal(err)
+	}
+	if ec2B.claims != 1 {
+		t.Fatalf("taking the Lease must claim the route table at once, got %d claims", ec2B.claims)
+	}
+
+	// Further renewals keep the Lease without extra EC2 calls.
+	if err := renewOwnLease(ctx, mgrB, recB, az, "agent-b", logger); err != nil {
+		t.Fatal(err)
+	}
+	if ec2B.claims != 1 {
+		t.Fatalf("a plain renewal must not claim again, got %d claims", ec2B.claims)
+	}
+}
+
 // TestServeOwnAZPreemptsForeignFailover verifies the returning own-AZ agent still
 // reclaims the AZ from a failover holder in another AZ.
 func TestServeOwnAZPreemptsForeignFailover(t *testing.T) {

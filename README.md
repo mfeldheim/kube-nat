@@ -12,6 +12,10 @@ kube-nat replaces AWS NAT Gateways with a self-managed iptables MASQUERADE Daemo
 
 ## Changelog
 
+### v0.1.23 (2026-11-01)
+
+- **No more egress blackhole when a NAT node is removed.** A standby agent that took over its AZ's freed Lease only claimed the route table on the next reconcile tick, up to `KUBE_NAT_RECONCILE_INTERVAL` (30s) later. If the old instance was terminated in between, `0.0.0.0/0` pointed at nothing (state `blackhole`) and the whole AZ lost egress for that time. The lease loop now claims the route as soon as this agent holds the Lease without having claimed yet, so the handover happens within one lease renewal interval.
+
 ### v0.1.22 (2026-11-01)
 
 - **Clients reconnect at once after a NAT swap.** Connections translated by the previous NAT node used to hang for about 15 minutes after a failover or node replacement: the new node adopted their mid-stream packets (`nf_conntrack_tcp_loose=1`), sent them out under its own public IP, and the remote end dropped them silently until the client's `tcp_retries2` gave up. The agent now turns loose pickup off and puts a `REJECT --reject-with tcp-reset` rule for `INVALID` TCP packets at the top of `FORWARD`, ahead of kube-proxy's silent `DROP`. Each stale packet is answered with a RST, so the client sees a reset and opens a new connection through the new NAT node. Configurable via `agent.resetStaleFlows` / `KUBE_NAT_RESET_STALE_FLOWS` (default on).
